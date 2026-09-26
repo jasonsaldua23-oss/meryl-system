@@ -10,6 +10,7 @@ import { toast } from 'sonner';
 import { useProducts, useSales } from '../../lib/hooks';
 import { shortId } from './ui/utils';
 import { localDateKey as localDayKey, parseDbTimestamp } from '../../lib/datetime';
+import { useAuth } from '../../lib/auth-context';
 
 function isCompletedSale(sale: any) {
   const payment = Array.isArray(sale.payment) ? sale.payment[0] : sale.payment;
@@ -21,10 +22,19 @@ function saleDate(sale: any) {
   return parseDbTimestamp(sale.transaction_date ?? sale.created_at);
 }
 
-function money(value: number) {
-  if (value >= 1000000) return `PHP ${(value / 1000000).toFixed(1)}M`;
-  if (value >= 1000) return `PHP ${(value / 1000).toFixed(1)}K`;
-  return `PHP ${value.toFixed(2)}`;
+/** Exact peso amount for figures, tables and exports (e.g. PHP 1,819.50). */
+export function money(value: number) {
+  const amount = Number(value) || 0;
+  return `PHP ${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/** Short peso amount for chart axes only (e.g. PHP 1.8K). */
+function moneyCompact(value: number) {
+  const amount = Number(value) || 0;
+  const abs = Math.abs(amount);
+  if (abs >= 1000000) return `PHP ${(amount / 1000000).toFixed(1)}M`;
+  if (abs >= 1000) return `PHP ${(amount / 1000).toFixed(1)}K`;
+  return `PHP ${amount.toFixed(0)}`;
 }
 
 function moneyWhole(value: number) {
@@ -37,21 +47,80 @@ function percentChange(current: number, previous: number) {
   return ((current - previous) / previous) * 100;
 }
 
+/** Payment method label. The legacy backend stored GCash as "online". */
+export function paymentLabel(raw: unknown) {
+  const value = String(raw ?? '').toLowerCase();
+  if (value.includes('gcash') || value.includes('online') || value.includes('e-wallet')) return 'GCash';
+  if (value.includes('card')) return 'Card';
+  return 'Cash';
+}
+
+/** Receipt number in the same format printed by the POS (RCP-YYYYMMDD-XXXX). */
+function receiptNumberFor(sale: any, date: Date) {
+  const rawId = String(sale.receipt_number ?? sale.sales_id ?? sale.id ?? '').trim();
+  if (/^(RCP|SLS|TXN)-/.test(rawId)) return rawId;
+  const suffix = rawId.replace(/[^a-zA-Z0-9]/g, '').slice(-4).toUpperCase() || '0001';
+  return `RCP-${localDayKey(date).replace(/-/g, '')}-${suffix}`;
+}
+
+/** Numeric shoe-size order (7, 8, 9, 10...), with non-numeric labels after, alphabetically. */
+export function compareSizes(a: string, b: string) {
+  const numA = parseFloat(String(a).replace(/[^\d.]/g, ''));
+  const numB = parseFloat(String(b).replace(/[^\d.]/g, ''));
+  const aIsNum = !Number.isNaN(numA);
+  const bIsNum = !Number.isNaN(numB);
+  if (aIsNum && bIsNum) return numA - numB;
+  if (aIsNum) return -1;
+  if (bIsNum) return 1;
+  return String(a).localeCompare(String(b));
+}
+
+/** "+12.5% vs last period", or plain wording when there is nothing to compare against. */
+export function comparisonText(current: number, previous: number) {
+  if (!previous && !current) return 'No sales in either period';
+  if (!previous) return 'New — no sales last period';
+  const change = percentChange(current, previous);
+  return `${change >= 0 ? '+' : ''}${change.toFixed(1)}% vs same point last period`;
+}
+
 type ReportPeriod = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'annually' | 'custom';
 
-function rangeWindow(timeRange: ReportPeriod, customStartDate?: string, customEndDate?: string) {
+/** Parses a YYYY-MM-DD date input as a local calendar day (new Date() would read it as UTC). */
+function parseLocalDateInput(value?: string) {
+  const match = String(value ?? '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+}
+
+/**
+ * Adds previousEnd so comparisons are like-for-like: when the current period is
+ * still in progress (e.g. Sep 1-26 of "this month"), it is compared with the
+ * same elapsed span of the previous period (Aug 1-26), not the whole of August.
+ */
+export function rangeWindow(timeRange: ReportPeriod, customStartDate?: string, customEndDate?: string) {
+  const window = baseRangeWindow(timeRange, customStartDate, customEndDate);
+  const elapsedEnd = new Date(Math.min(Date.now(), window.now.getTime()));
+  const elapsedMs = Math.max(0, elapsedEnd.getTime() - window.start.getTime());
+  const previousEnd = new Date(Math.min(window.previousStart.getTime() + elapsedMs, window.start.getTime() - 1));
+  return { ...window, previousEnd };
+}
+
+function baseRangeWindow(timeRange: ReportPeriod, customStartDate?: string, customEndDate?: string) {
   const now = new Date();
 
   if (timeRange === 'custom') {
-    const parsedStart = customStartDate ? new Date(customStartDate) : null;
-    const parsedEnd = customEndDate ? new Date(customEndDate) : null;
+    const parsedStart = parseLocalDateInput(customStartDate);
+    const parsedEnd = parseLocalDateInput(customEndDate);
     const start = parsedStart && !Number.isNaN(parsedStart.getTime()) ? parsedStart : new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const end = parsedEnd && !Number.isNaN(parsedEnd.getTime()) ? parsedEnd : now;
     start.setHours(0, 0, 0, 0);
     end.setHours(23, 59, 59, 999);
     const safeStart = start <= end ? start : end;
     const safeEnd = end >= start ? end : start;
-    const days = Math.max(1, Math.ceil((safeEnd.getTime() - safeStart.getTime()) / 86400000) + 1);
+    // Whole calendar days in the range (Aug 1-10 = 10). The end is 23:59:59.999,
+    // so compare day starts; ceil() here counted one extra day.
+    const endDay = new Date(safeEnd.getFullYear(), safeEnd.getMonth(), safeEnd.getDate());
+    const days = Math.max(1, Math.round((endDay.getTime() - safeStart.getTime()) / 86400000) + 1);
     const previousStart = new Date(safeStart);
     previousStart.setDate(safeStart.getDate() - days);
     return { now: safeEnd, start: safeStart, previousStart, days };
@@ -334,6 +403,13 @@ function endOfDay(date: Date) {
 }
 
 function salesTrendFrame(timeRange: ReportPeriod, customStartDate?: string, customEndDate?: string) {
+  const frame = salesTrendFrameUncapped(timeRange, customStartDate, customEndDate);
+  // Never chart days that have not happened yet (they would plot as zero sales).
+  const endOfToday = endOfDay(new Date());
+  return { ...frame, end: frame.end > endOfToday ? endOfToday : frame.end };
+}
+
+function salesTrendFrameUncapped(timeRange: ReportPeriod, customStartDate?: string, customEndDate?: string) {
   const window = rangeWindow(timeRange, customStartDate, customEndDate);
   const baseEnd = window.now;
 
@@ -392,6 +468,7 @@ export function ReportsAnalytics() {
   const [inventoryCurrentPage, setInventoryCurrentPage] = useState(1);
   const [inventoryPageSize, setInventoryPageSize] = useState(25);
   const [drilldownSection, setDrilldownSection] = useState<'all' | 'shoe' | 'brands' | 'categories' | 'departments' | 'sizes' | 'variants' | 'payments'>('all');
+  const { user } = useAuth();
   const salesQuery = useSales();
   const productsQuery = useProducts();
 
@@ -416,8 +493,7 @@ export function ReportsAnalytics() {
   }, [productRows]);
 
   const currentMetrics = useMemo(() => {
-    const { now, start, previousStart } = rangeWindow(timeRange, customStartDate, customEndDate);
-    const compareEnd = new Date(start.getTime() - 1);
+    const { now, start, previousStart, previousEnd: compareEnd } = rangeWindow(timeRange, customStartDate, customEndDate);
 
     const current = salesRows.filter((sale) => {
       const date = saleDate(sale);
@@ -497,7 +573,7 @@ export function ReportsAnalytics() {
   const topRankings = useMemo(() => {
     const { now, start } = rangeWindow(timeRange, customStartDate, customEndDate);
 
-    const byProduct = new Map<string, { key: string; name: string; subtitle?: string; sales: number; revenue: number; margin: number }>();
+    const byProduct = new Map<string, { key: string; name: string; subtitle?: string; sales: number; revenue: number; cost: number; margin: number }>();
     const byBrand = new Map<string, { key: string; name: string; subtitle?: string; sales: number; revenue: number }>();
     const bySize = new Map<string, { key: string; name: string; subtitle?: string; sales: number; revenue: number }>();
     const byVariant = new Map<string, { key: string; name: string; subtitle?: string; sales: number; revenue: number }>();
@@ -512,7 +588,7 @@ export function ReportsAnalytics() {
       // Payment method
       const payment = Array.isArray(sale.payment) ? sale.payment[0] : sale.payment;
       const rawPayMethod = String(payment?.payment_method ?? sale.payment_method ?? 'Cash').toLowerCase();
-      const payMethodLabel = rawPayMethod.includes('gcash') ? 'GCash' : 'Cash';
+      const payMethodLabel = paymentLabel(rawPayMethod);
       const saleRevenue = Number(sale.total_amount ?? 0);
       const prevPay = byPayment.get(payMethodLabel) ?? { key: payMethodLabel, name: payMethodLabel, subtitle: 'Payment Method', sales: 0, revenue: 0 };
       prevPay.sales += 1;
@@ -536,11 +612,14 @@ export function ReportsAnalytics() {
           subtitle: `${brandName} • ${categoryName}`,
           sales: 0,
           revenue: 0,
+          cost: 0,
           margin: 0,
         };
         prevProd.sales += qty;
         prevProd.revenue += revenue;
-        prevProd.margin = prevProd.revenue > 0 ? Math.max(0, Math.round(((prevProd.revenue - cost) / prevProd.revenue) * 100)) : 0;
+        // Margin must use the cost of every pair sold, not just this line's.
+        prevProd.cost += cost;
+        prevProd.margin = prevProd.revenue > 0 ? Math.max(0, Math.round(((prevProd.revenue - prevProd.cost) / prevProd.revenue) * 100)) : 0;
         byProduct.set(productName, prevProd);
 
         // 2. Brand
@@ -688,16 +767,23 @@ export function ReportsAnalytics() {
     if (!activeShoeName) return null;
     const { now, start } = rangeWindow(timeRange, customStartDate, customEndDate);
 
-    const matchingProducts = productRows.filter((p: any) => {
-      const name = String(p.product_name ?? '').trim().toLowerCase();
-      return name === activeShoeName.toLowerCase() || name.includes(activeShoeName.toLowerCase());
-    });
+    // Match the model exactly ("Kobe 6" must not pull in "Kobe 6 Protro"); fall back
+    // to a partial match only when no product has exactly this name.
+    const target = activeShoeName.toLowerCase();
+    const exactMatches = productRows.filter((p: any) => String(p.product_name ?? '').trim().toLowerCase() === target);
+    const useExactMatch = exactMatches.length > 0;
+    const isSelectedModel = (name: string) => (useExactMatch ? name === target : name.includes(target));
+    const matchingProducts = useExactMatch
+      ? exactMatches
+      : productRows.filter((p: any) => String(p.product_name ?? '').trim().toLowerCase().includes(target));
 
     const sampleProduct = matchingProducts[0];
     const brand = String(sampleProduct?.brand ?? 'Meryl Shoes').trim();
     const category = String(sampleProduct?.category?.[0]?.category_name ?? sampleProduct?.category?.category_name ?? 'Footwear').trim();
     const department = String(sampleProduct?.gender ?? 'Unisex').trim();
-    const basePrice = Number(sampleProduct?.price ?? 0);
+    // Selling price lives on the inventory row (srp), not on product.
+    const sampleInventory = Array.isArray(sampleProduct?.inventory) ? sampleProduct.inventory[0] : sampleProduct?.inventory;
+    const basePrice = Number(sampleInventory?.srp ?? sampleProduct?.price ?? sampleProduct?.cost_price ?? 0);
     const costPrice = Number(sampleProduct?.cost_price ?? 0);
 
     let totalStock = 0;
@@ -733,20 +819,17 @@ export function ReportsAnalytics() {
       const date = saleDate(sale);
       if (!date || date < start || date > now) return;
 
-      const rawId = String(sale.receipt_number ?? sale.display_sales_id ?? sale.sales_id ?? sale.id ?? '').trim();
-      const dateDigits = date ? localDayKey(date).replace(/-/g, '') : localDayKey(new Date()).replace(/-/g, '');
-      const cleanSuffix = rawId ? rawId.replace(/[^a-zA-Z0-9]/g, '').slice(-4).toUpperCase() : '0001';
-      const saleId = sale.receipt_number || (rawId && (rawId.startsWith('RCP-') || rawId.startsWith('SLS-') || rawId.startsWith('TXN-')) ? rawId : `RCP-${dateDigits}-${cleanSuffix || '0001'}`);
+      const saleId = receiptNumberFor(sale, date);
       const customer = String(sale.customer_name ?? sale.customer?.name ?? 'Walk-in Customer');
       const payment = Array.isArray(sale.payment) ? sale.payment[0] : sale.payment;
       const rawPay = String(payment?.payment_method ?? sale.payment_method ?? 'Cash').toLowerCase();
-      const payLabel = rawPay.includes('gcash') ? 'GCash' : rawPay.includes('card') ? 'Card' : 'Cash';
+      const payLabel = paymentLabel(rawPay);
 
       const details = Array.isArray(sale.sales_details) ? sale.sales_details : [];
       details.forEach((detail: any) => {
         const prod = productLookup.get(String(detail.product_id ?? '')) ?? detail.product;
         const prodName = String(prod?.product_name ?? detail.product_name ?? '').trim().toLowerCase();
-        if (prodName !== activeShoeName.toLowerCase() && !prodName.includes(activeShoeName.toLowerCase())) return;
+        if (!isSelectedModel(prodName)) return;
 
         const qty = Number(detail.quantity ?? 0);
         const price = Number(detail.price ?? basePrice);
@@ -788,7 +871,7 @@ export function ReportsAnalytics() {
     const avgPrice = totalPairs > 0 ? Math.round(totalRevenue / totalPairs) : basePrice;
 
     const allSizesSet = new Set([...Array.from(stockBySize.keys()), ...Array.from(sizesSold.keys())]);
-    const sizeBreakdown = Array.from(allSizesSet).sort().map((sz) => {
+    const sizeBreakdown = Array.from(allSizesSet).sort(compareSizes).map((sz) => {
       const sold = sizesSold.get(sz) ?? { pairs: 0, revenue: 0 };
       const stock = stockBySize.get(sz) ?? 0;
       return {
@@ -1179,11 +1262,11 @@ export function ReportsAnalytics() {
       const date = saleDate(sale);
       if (!date || date < start || date > now) return;
 
-      const saleId = String(sale.sale_id ?? sale.id ?? 'TXN').slice(0, 10);
+      const saleId = receiptNumberFor(sale, date);
       const customer = String(sale.customer_name ?? sale.customer?.name ?? 'Walk-in Customer');
       const payment = Array.isArray(sale.payment) ? sale.payment[0] : sale.payment;
       const rawPay = String(payment?.payment_method ?? sale.payment_method ?? 'Cash').toLowerCase();
-      const payLabel = rawPay.includes('gcash') ? 'GCash' : rawPay.includes('card') ? 'Card' : 'Cash';
+      const payLabel = paymentLabel(rawPay);
       const totalAmount = Number(sale.total_amount ?? 0);
       totalRev += totalAmount;
       totalTx += 1;
@@ -1213,7 +1296,7 @@ export function ReportsAnalytics() {
   }, [customEndDate, customStartDate, salesRows, timeRange]);
 
   const revenueByCategory = useMemo(() => {
-    const { now, start, previousStart } = rangeWindow(timeRange, customStartDate, customEndDate);
+    const { now, start, previousStart, previousEnd } = rangeWindow(timeRange, customStartDate, customEndDate);
     const current = new Map<string, number>();
     const previous = new Map<string, number>();
     const addSale = (sale: any, target: Map<string, number>) => {
@@ -1228,7 +1311,7 @@ export function ReportsAnalytics() {
       const date = saleDate(sale);
       if (!date) return;
       if (date >= start && date <= now) addSale(sale, current);
-      if (date >= previousStart && date < start) addSale(sale, previous);
+      if (date >= previousStart && date <= previousEnd) addSale(sale, previous);
     });
     const total = Array.from(current.values()).reduce((sum, value) => sum + value, 0);
     return Array.from(current.entries())
@@ -1376,7 +1459,7 @@ export function ReportsAnalytics() {
       const onHand = Number(inventory?.stock_quantity ?? product.stock ?? 0);
       const reserved = Number(inventory?.reserved_quantity ?? inventory?.held_stock ?? product.reserved_stock ?? 0);
       const stock = Math.max(0, onHand - reserved);
-      const reorder = Number(product.reorder_level ?? inventory?.reorder_level ?? 10);
+      const reorder = Number(inventory?.reorder_level ?? product.reorder_level ?? 10);
 
       // Price resolution: check inventory.srp, cost_price, unit_price, price
       const rawCostPrice = Number(product.cost_price ?? product.cost ?? 0);
@@ -1627,7 +1710,7 @@ export function ReportsAnalytics() {
     return {
       period: formatDateRange(start, now),
       store: 'Araneta Ave, Bacolod, 6100 Negros Occidental',
-      preparedBy: 'Store Manager',
+      preparedBy: user?.name || user?.username || 'Store Manager',
       atv,
       bestBrandName: bestBrand?.[0] ?? 'N/A',
       bestBrandUnits: bestBrand?.[1] ?? 0,
@@ -1638,7 +1721,105 @@ export function ReportsAnalytics() {
       discountRate,
       netSales: Math.max(0, grossRevenue - discounts),
     };
-  }, [currentMetrics, customEndDate, customStartDate, productLookup, salesRows, timeRange]);
+  }, [currentMetrics, customEndDate, customStartDate, productLookup, salesRows, timeRange, user?.name, user?.username]);
+
+  /**
+   * Suggested actions for the selected period, derived from sales and stock:
+   * what to restock, what is not moving, and where revenue is going.
+   */
+  const suggestions = useMemo(() => {
+    type Suggestion = { tone: 'urgent' | 'warning' | 'info' | 'good'; title: string; detail: string };
+    const items: Suggestion[] = [];
+    const { now, start } = rangeWindow(timeRange, customStartDate, customEndDate);
+    const today = endOfDay(new Date());
+    const effectiveEnd = now < today ? now : today;
+    const periodDays = Math.max(1, Math.round((startOfDay(effectiveEnd).getTime() - startOfDay(start).getTime()) / 86400000) + 1);
+
+    const unitsSold = new Map<string, number>();
+    const salesDays = new Set<string>();
+    salesRows.forEach((sale) => {
+      const date = saleDate(sale);
+      if (!date || date < start || date > effectiveEnd) return;
+      salesDays.add(localDayKey(date));
+      const details = Array.isArray(sale.sales_details) ? sale.sales_details : [];
+      details.forEach((detail: any) => {
+        const id = String(detail.product_id ?? '');
+        unitsSold.set(id, (unitsSold.get(id) ?? 0) + Number(detail.quantity ?? 0));
+      });
+    });
+    const describe = (row: { name: string; color: string; size: string }) =>
+      [row.name, row.color !== 'N/A' ? row.color : '', row.size !== 'N/A' ? `Size ${row.size}` : ''].filter(Boolean).join(' · ');
+
+    // 1. Selling items that are running out.
+    const restock = inventoryAnalytics.allRows
+      .filter((row) => (row.status === 'Out of Stock' || row.status === 'Critical' || row.status === 'Reorder Required') && (unitsSold.get(row.id) ?? 0) > 0)
+      .sort((a, b) => (unitsSold.get(b.id) ?? 0) - (unitsSold.get(a.id) ?? 0) || a.stock - b.stock)
+      .slice(0, 3);
+    restock.forEach((row) => {
+      items.push({
+        tone: row.stock === 0 ? 'urgent' : 'warning',
+        title: row.stock === 0 ? `Restock now: ${describe(row)}` : `Reorder soon: ${describe(row)}`,
+        detail: `${row.stock} left (reorder at ${row.reorder}) after selling ${unitsSold.get(row.id)} this period.`,
+      });
+    });
+
+    // 2. Stock that is not moving.
+    if (periodDays >= 7) {
+      const idle = inventoryAnalytics.allRows.filter((row) => row.stock >= Math.max(5, row.reorder * 2) && !(unitsSold.get(row.id) ?? 0));
+      if (idle.length) {
+        const idleValue = idle.reduce((sum, row) => sum + row.stockValue, 0);
+        const examples = [...idle].sort((a, b) => b.stockValue - a.stockValue).slice(0, 2).map(describe).join('; ');
+        items.push({
+          tone: 'info',
+          title: `${idle.length} stocked item${idle.length === 1 ? '' : 's'} had no sales this period`,
+          detail: `${money(idleValue)} of inventory is not moving (e.g. ${examples}). Consider a promotion or display change.`,
+        });
+      }
+    }
+
+    // 3. Revenue direction vs the same point last period.
+    const { revenue, transactions } = currentMetrics.current;
+    const previousRevenue = currentMetrics.previous.revenue;
+    if (previousRevenue > 0) {
+      const change = percentChange(revenue, previousRevenue);
+      if (change <= -20) {
+        items.push({ tone: 'warning', title: `Revenue is down ${Math.abs(change).toFixed(0)}% vs the same point last period`, detail: `${money(revenue)} now vs ${money(previousRevenue)} then. Check stock-outs and consider a promotion.` });
+      } else if (change >= 20) {
+        items.push({ tone: 'good', title: `Revenue is up ${change.toFixed(0)}% vs the same point last period`, detail: `${money(revenue)} now vs ${money(previousRevenue)} then. Make sure best sellers stay in stock.` });
+      }
+    }
+
+    // 4. Best seller and best size to prioritize when reordering.
+    const bestProduct = topRankings.products.byUnits[0];
+    if (bestProduct && bestProduct.sales > 0) {
+      const share = revenue > 0 ? Math.round((bestProduct.revenue / revenue) * 100) : 0;
+      items.push({ tone: 'good', title: `Best seller: ${bestProduct.name}`, detail: `${bestProduct.sales} pairs sold${share ? `, ${share}% of revenue` : ''}. Keep its popular sizes in stock.` });
+    }
+    const bestSize = topRankings.size.byUnits[0];
+    if (bestSize && bestSize.sales > 0) {
+      items.push({ tone: 'info', title: `${bestSize.name} is the most requested size`, detail: `${bestSize.sales} pairs sold. Prioritize it when reordering.` });
+    }
+
+    // 5. Discounts eating into sales.
+    if (businessSummary.discountRate >= 15) {
+      items.push({ tone: 'warning', title: `Discounts took ${businessSummary.discountRate.toFixed(0)}% of gross sales`, detail: `${money(businessSummary.discounts)} given away. Review which promotions are still worth running.` });
+    }
+
+    // 6. Days without sales.
+    if (periodDays >= 7) {
+      const quietDays = periodDays - salesDays.size;
+      if (quietDays > 0) {
+        items.push({ tone: 'info', title: `${quietDays} of ${periodDays} days had no sales`, detail: 'See Reports → Sales for the day-by-day list; quiet days may suit promotions or staff scheduling.' });
+      }
+    }
+
+    if (!transactions) {
+      items.unshift({ tone: 'info', title: 'No completed sales in this period', detail: 'Pick a longer date range to get sales-based suggestions.' });
+    }
+
+    const order = { urgent: 0, warning: 1, good: 2, info: 3 } as const;
+    return items.sort((a, b) => order[a.tone] - order[b.tone]).slice(0, 7);
+  }, [businessSummary, currentMetrics, customEndDate, customStartDate, inventoryAnalytics.allRows, salesRows, timeRange, topRankings]);
 
   const summarizeSkuTurnover = (unitsBySku: Map<string, number>, periodDays: number) => {
     let units = 0;
@@ -1863,6 +2044,14 @@ export function ReportsAnalytics() {
         ['Gross Sales Before Discounts', money(businessSummary.grossRevenue)],
         ['Net After Discounts', money(businessSummary.netSales)],
       ], [250, 265]);
+      if (suggestions.length) {
+        drawTitle('Suggested Actions');
+        // Title and detail on separate rows; PDF table cells truncate rather than wrap.
+        drawTable(['Priority', 'Suggestion'], suggestions.flatMap((item) => [
+          [{ urgent: 'Urgent', warning: 'Attention', good: 'Opportunity', info: 'Insight' }[item.tone], item.title],
+          ['', item.detail],
+        ]), [90, 425]);
+      }
       drawTitle('Sales Trend');
       drawTable(['Period', 'Units Sold', 'Revenue', 'Customers'], filteredSalesTrends.map((row) => [row.date, row.sales, money(row.revenue), row.customers]));
     } else if (reportType === 'sales') {
@@ -2038,8 +2227,7 @@ export function ReportsAnalytics() {
   };
 
   const inventoryPeriodMetrics = useMemo(() => {
-    const { now, start, previousStart, days } = rangeWindow(timeRange, customStartDate, customEndDate);
-    const compareEnd = new Date(start.getTime() - 1);
+    const { now, start, previousStart, previousEnd: compareEnd, days } = rangeWindow(timeRange, customStartDate, customEndDate);
     const collectUnitsBySku = (from: Date, to: Date) => {
       const unitsBySku = new Map<string, number>();
       salesRows.forEach((sale) => {
@@ -2141,6 +2329,19 @@ export function ReportsAnalytics() {
         lines.push(formatRow(['Period', 'Pairs Sold', 'Gross Revenue (PHP)', 'Discount Applied (PHP)', 'Net Sales (PHP)']));
         salesBreakdownRows.forEach((r) => {
           lines.push(formatRow([r.date, r.pairs, r.gross.toFixed(2), r.discount.toFixed(2), r.net.toFixed(2)]));
+        });
+        lines.push('');
+      }
+
+      if (reportType === 'overview' && suggestions.length) {
+        lines.push(formatRow(['=== SUGGESTED ACTIONS ===']));
+        lines.push(formatRow(['Priority', 'Suggestion', 'Details']));
+        suggestions.forEach((item) => {
+          lines.push(formatRow([
+            { urgent: 'Urgent', warning: 'Attention', good: 'Opportunity', info: 'Insight' }[item.tone],
+            item.title,
+            item.detail,
+          ]));
         });
         lines.push('');
       }
@@ -2606,7 +2807,7 @@ export function ReportsAnalytics() {
                   <p className="text-sm text-white/70">Total Revenue</p>
                   <p className="text-2xl text-white">{money(currentMetrics.current.revenue)}</p>
                   {showComparison && <p className={`text-xs mt-1 ${revenueChange >= 0 ? 'text-green-400' : 'text-red-300'}`}>
-                    {revenueChange >= 0 ? '+' : ''}{revenueChange.toFixed(1)}% vs last period
+                    {comparisonText(currentMetrics.current.revenue, currentMetrics.previous.revenue)}
                   </p>}
                 </div>
                 <Coins className="h-8 w-8 text-yellow-400" />
@@ -2620,7 +2821,7 @@ export function ReportsAnalytics() {
                   <p className="text-sm text-white/70">Units Sold</p>
                   <p className="text-2xl text-white">{currentMetrics.current.units.toLocaleString()}</p>
                   {showComparison && <p className={`text-xs mt-1 ${unitsChange >= 0 ? 'text-green-400' : 'text-red-300'}`}>
-                    {unitsChange >= 0 ? '+' : ''}{unitsChange.toFixed(1)}% vs last period
+                    {comparisonText(currentMetrics.current.units, currentMetrics.previous.units)}
                   </p>}
                 </div>
                 <Package className="h-8 w-8 text-yellow-400" />
@@ -2635,7 +2836,9 @@ export function ReportsAnalytics() {
                   <p className="text-2xl text-white">{money(currentMetrics.current.grossProfit)}</p>
                   {showComparison ? (
                     <p className={`text-xs mt-1 ${profitChange >= 0 ? 'text-green-400' : 'text-red-300'}`}>
-                      {profitChange >= 0 ? '+' : ''}{profitChange.toFixed(1)}% • {currentMetrics.current.margin.toFixed(1)}% margin
+                      {currentMetrics.previous.grossProfit
+                        ? `${profitChange >= 0 ? '+' : ''}${profitChange.toFixed(1)}%`
+                        : 'New'} • {currentMetrics.current.margin.toFixed(1)}% margin
                     </p>
                   ) : (
                     <p className="text-xs text-zinc-400 mt-1">{currentMetrics.current.margin.toFixed(1)}% gross profit margin</p>
@@ -2653,7 +2856,7 @@ export function ReportsAnalytics() {
                   <p className="text-2xl text-white">{money(currentMetrics.current.aov)}</p>
                   {showComparison ? (
                     <p className={`text-xs mt-1 ${aovChange >= 0 ? 'text-green-400' : 'text-red-300'}`}>
-                      {aovChange >= 0 ? '+' : ''}{aovChange.toFixed(1)}% vs last period
+                      {comparisonText(currentMetrics.current.aov, currentMetrics.previous.aov)}
                     </p>
                   ) : (
                     <p className="text-xs text-zinc-400 mt-1">{currentMetrics.current.transactions.toLocaleString()} completed orders</p>
@@ -2737,6 +2940,46 @@ export function ReportsAnalytics() {
 
           <Card className="bg-[#0b0b0f] border-[#24242d]">
             <CardHeader>
+              <CardTitle className="text-yellow-300 flex items-center gap-2">
+                <Sparkles className="w-5 h-5" />
+                Suggested Actions
+              </CardTitle>
+              <p className="mt-1 text-sm text-white/55">Based on sales and stock for {selectedRangeLabel}.</p>
+            </CardHeader>
+            <CardContent className="pt-0">
+              {suggestions.length ? (
+                <ul className="divide-y divide-[#24242d] rounded-lg border border-[#24242d] bg-[#07070a]">
+                  {suggestions.map((item, index) => {
+                    const tone = {
+                      urgent: { dot: 'bg-red-500', label: 'Urgent', text: 'text-red-300' },
+                      warning: { dot: 'bg-amber-400', label: 'Attention', text: 'text-amber-300' },
+                      good: { dot: 'bg-emerald-400', label: 'Opportunity', text: 'text-emerald-300' },
+                      info: { dot: 'bg-sky-400', label: 'Insight', text: 'text-sky-300' },
+                    }[item.tone];
+                    return (
+                      <li key={index} className="flex gap-3 px-4 py-3">
+                        <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${tone.dot}`} />
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-white">
+                            <span className={`mr-2 text-[10px] font-bold uppercase tracking-wider ${tone.text}`}>{tone.label}</span>
+                            {item.title}
+                          </p>
+                          <p className="mt-0.5 text-xs text-white/60">{item.detail}</p>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p className="rounded-lg border border-[#24242d] bg-[#07070a] px-4 py-3 text-sm text-white/60">
+                  Nothing needs attention for this period.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="bg-[#0b0b0f] border-[#24242d]">
+            <CardHeader>
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <CardTitle className="text-yellow-300 flex items-center gap-2">
@@ -2785,7 +3028,7 @@ export function ReportsAnalytics() {
                     axisLine={false}
                     tickLine={false}
                     tick={{ fill: '#facc15', fontSize: 12 }}
-                    tickFormatter={(value) => money(Number(value)).replace('PHP ', '')}
+                    tickFormatter={(value) => moneyCompact(Number(value)).replace('PHP ', '')}
                     width={64}
                   />
                   <Tooltip
@@ -3574,7 +3817,7 @@ export function ReportsAnalytics() {
                         <BarChart data={brandDetailReport.allBrandsList} margin={{ top: 10, right: 20, left: 0, bottom: 5 }}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#24242d" vertical={false} />
                           <XAxis dataKey="name" stroke="#a1a1aa" fontSize={11} />
-                          <YAxis yAxisId="left" stroke="#facc15" fontSize={11} tickFormatter={(v) => money(Number(v))} />
+                          <YAxis yAxisId="left" stroke="#facc15" fontSize={11} tickFormatter={(v) => moneyCompact(Number(v))} />
                           <YAxis yAxisId="right" orientation="right" stroke="#38bdf8" fontSize={11} />
                           <Tooltip content={<ChartWhiteTooltip />} />
                           <Legend wrapperStyle={{ fontSize: '11px', color: '#facc15' }} />
@@ -3684,7 +3927,7 @@ export function ReportsAnalytics() {
                     <BarChart data={categoryDetailReport.allCategoriesList} margin={{ top: 10, right: 15, left: 0, bottom: 5 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#24242d" vertical={false} />
                       <XAxis dataKey="name" stroke="#a1a1aa" fontSize={11} />
-                      <YAxis stroke="#facc15" fontSize={11} tickFormatter={(v) => money(Number(v))} />
+                      <YAxis stroke="#facc15" fontSize={11} tickFormatter={(v) => moneyCompact(Number(v))} />
                       <Tooltip content={<ChartWhiteTooltip />} />
                       <Bar dataKey="revenue" fill="#facc15" radius={[4, 4, 0, 0]} />
                     </BarChart>
@@ -3867,7 +4110,7 @@ export function ReportsAnalytics() {
                     Footwear Sizing Demand Curve (EU Sizes)
                   </h4>
                   <ResponsiveContainer width="100%" height={180}>
-                    <BarChart data={[...sizeDetailReport.allSizesList].sort((a, b) => Number(a.name) - Number(b.name))} margin={{ top: 10, right: 15, left: 0, bottom: 5 }}>
+                    <BarChart data={[...sizeDetailReport.allSizesList].sort((a, b) => compareSizes(a.name, b.name))} margin={{ top: 10, right: 15, left: 0, bottom: 5 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#24242d" vertical={false} />
                       <XAxis dataKey="name" stroke="#a1a1aa" fontSize={11} label={{ value: 'Size (EU)', position: 'insideBottom', offset: -2, fill: '#71717a', fontSize: 10 }} />
                       <YAxis stroke="#facc15" fontSize={11} allowDecimals={false} />
@@ -4263,7 +4506,7 @@ export function ReportsAnalytics() {
                     <BarChart data={inventoryAnalytics.brandList} margin={{ top: 10, right: 15, left: 0, bottom: 5 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#24242d" vertical={false} />
                       <XAxis dataKey="name" stroke="#a1a1aa" fontSize={11} />
-                      <YAxis yAxisId="left" stroke="#facc15" fontSize={11} tickFormatter={(v) => money(Number(v))} />
+                      <YAxis yAxisId="left" stroke="#facc15" fontSize={11} tickFormatter={(v) => moneyCompact(Number(v))} />
                       <YAxis yAxisId="right" orientation="right" stroke="#38bdf8" fontSize={11} />
                       <Tooltip content={<ChartWhiteTooltip />} />
                       <Bar yAxisId="left" dataKey="value" fill="#facc15" name="Stock Value (PHP)" radius={[4, 4, 0, 0]} />
