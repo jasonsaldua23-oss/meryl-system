@@ -17,6 +17,7 @@ import { useAuth } from "../../lib/auth-context";
 import { useInventory, useProducts, useReturns, useSales, useUsers } from "../../lib/hooks";
 import { supabase } from "../../lib/supabase";
 import { saveReceiptProof, getAllReceiptProofs, StoredReceiptProof } from "../../lib/receipt-proof-store";
+import { parseReplacementNote, resolveReplacementProduct } from "../../lib/replacement-details";
 import merylLogoBw from "../../assets/Meryl_Logo_BW.svg";
 import { shortId } from "./ui/utils";
 import { TablePagination } from "./ui/table-pagination";
@@ -30,6 +31,7 @@ type ReturnDetail = {
   productPrice: number;
   quantity_returned: number;
   reason: string;
+  customerReason: string;
   refund_amount: number;
   replacementProductId: string;
   replacementProductName: string;
@@ -180,19 +182,8 @@ function formatSequence(prefix: string, sequence: number) {
   return `${prefix}-${String(sequence).padStart(3, "0")}`;
 }
 
-function extractPesoAmount(text: string) {
-  const match = String(text ?? "").match(/(?:customer adds|adds)\s*php\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)/i);
-  if (!match?.[1]) return 0;
-  return Number(match[1].replace(/,/g, "")) || 0;
-}
-
 function normalizeProductName(value: string) {
   return String(value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-function extractReplacementName(text: string) {
-  const match = String(text ?? "").match(/replacement:\s*([^|]+)/i);
-  return match?.[1]?.trim() ?? "";
 }
 
 function formatReceiptNumber(salesId?: string, transactionDate?: string) {
@@ -1410,10 +1401,14 @@ export function ReturnManagement() {
           const replacementJoin = Array.isArray(detail.replacement_product) ? detail.replacement_product[0] : detail.replacement_product;
           const newProductJoin = Array.isArray(detail.new_product) ? detail.new_product[0] : detail.new_product;
           const returnedFallback = productMap.get(String(detail.returned_product_id ?? detail.product_id ?? ""));
-          const replacementNameFromNote = extractReplacementName(String(detail.reason ?? ""));
-          const replacementFallback =
-            productMap.get(String(detail.replacement_product_id ?? detail.new_product_id ?? "")) ??
-            [...productMap.values()].find((product) => normalizeProductName(product.name) === normalizeProductName(replacementNameFromNote));
+          const note = parseReplacementNote(detail.reason);
+          const returnedColor = String(product?.color ?? returnedFallback?.color ?? "N/A");
+          const replacementFallback = resolveReplacementProduct(
+            productMap.values(),
+            detail.replacement_product_id ?? detail.new_product_id,
+            note,
+            returnedColor,
+          );
           const replacement = replacementJoin ?? newProductJoin;
           const returnedInventory = Array.isArray(product?.inventory) ? product.inventory[0] : product?.inventory;
           const replacementInventory = Array.isArray(replacement?.inventory) ? replacement.inventory[0] : replacement?.inventory;
@@ -1421,8 +1416,6 @@ export function ReturnManagement() {
           const replacementPrice = Number(detail.new_price_unit ?? replacementInventory?.srp ?? replacement?.price ?? replacement?.cost_price ?? replacementFallback?.price ?? 0);
           const returnedQty = Number(detail.returned_quantity ?? detail.quantity_returned ?? 0);
           const replacementQty = Number(detail.new_quantity ?? detail.replacement_quantity ?? detail.quantity_returned ?? 0);
-          const storedDifference = Number(detail.net_difference ?? detail.price_difference ?? 0);
-          const computedDifference = (replacementPrice * replacementQty) - (returnedPrice * returnedQty);
           return {
             return_detail_id: String(detail.return_detail_id ?? ""),
             product_id: String(detail.product_id ?? ""),
@@ -1432,15 +1425,16 @@ export function ReturnManagement() {
             productPrice: returnedPrice,
             quantity_returned: returnedQty,
             reason: String(detail.reason ?? ""),
+            customerReason: note.customerReason,
             refund_amount: Number(detail.refund_amount ?? 0),
-            replacementProductId: String(detail.replacement_product_id ?? detail.new_product_id ?? ""),
-            replacementProductName: replacement?.product_name ?? replacementFallback?.name ?? "N/A",
-            replacementProductSize: String(replacement?.size ?? replacementFallback?.size ?? "N/A"),
-            replacementProductColor: String(replacement?.color ?? replacementFallback?.color ?? "N/A"),
+            replacementProductId: String(detail.replacement_product_id ?? detail.new_product_id ?? replacementFallback?.product_id ?? ""),
+            replacementProductName: replacement?.product_name ?? replacementFallback?.name ?? (note.replacementName || "N/A"),
+            replacementProductSize: String(replacement?.size ?? replacementFallback?.size ?? (note.replacementSize || "N/A")),
+            replacementProductColor: String(replacement?.color ?? replacementFallback?.color ?? returnedColor),
             replacementProductPrice: replacementPrice,
             replacementQuantity: replacementQty,
-            price_difference: storedDifference !== 0 ? storedDifference : computedDifference,
-            inventory_action: String(detail.inventory_action ?? "Defective / Not Sellable"),
+            price_difference: 0,
+            inventory_action: String(detail.inventory_action ?? (note.inventoryAction || "Defective / Not Sellable")),
           };
         }),
       };
@@ -1776,22 +1770,33 @@ export function ReturnManagement() {
           `Reason: ${finalReason}`,
         ].join(" | ");
 
+        // Price columns were dropped (1:1 exchanges carry no price difference), so they
+        // must not be sent; otherwise every insert fell back to the note-only row and
+        // the replacement product was never stored.
+        const baseDetail = {
+          return_id: returnId,
+          product_id: line.returned_product_id,
+          quantity_returned: line.quantity,
+          reason: replacementNote,
+          refund_amount: 0,
+        };
         await tryInsertRow("return_details", [
           {
+            ...baseDetail,
             return_detail_id: buildClientId(),
-            return_id: returnId,
-            product_id: line.returned_product_id,
-            quantity_returned: line.quantity,
-            reason: replacementNote,
-            refund_amount: 0,
             replacement_product_id: line.replacement_product_id,
             replacement_quantity: line.quantity,
             returned_product_id: line.returned_product_id,
             returned_quantity: line.quantity,
-            returned_price_unit: line.returned_price_unit,
             new_product_id: line.replacement_product_id,
             new_quantity: line.quantity,
-            new_price_unit: line.replacement_price_unit,
+            inventory_action: effectiveLineInventoryAction,
+          },
+          {
+            ...baseDetail,
+            return_detail_id: buildClientId(),
+            replacement_product_id: line.replacement_product_id,
+            replacement_quantity: line.quantity,
             inventory_action: effectiveLineInventoryAction,
           },
           {
@@ -3308,9 +3313,8 @@ export function ReturnManagement() {
                                       <div className="rounded-md border border-red-900/50 bg-red-950/20 p-3">
                                         <p className="mb-2 text-xs uppercase tracking-wide text-zinc-400">Replaced Item</p>
                                         <p className="font-medium text-zinc-100">{detail.productName}</p>
-                                        <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-zinc-300">
+                                        <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-zinc-300">
                                           <span>Qty: {detail.quantity_returned}</span>
-                                          <span>Price: {formatCurrency(detail.productPrice)}</span>
                                           <span>Size: {detail.productSize}</span>
                                           <span>Color: {detail.productColor}</span>
                                         </div>
@@ -3318,9 +3322,8 @@ export function ReturnManagement() {
                                       <div className="rounded-md border border-emerald-900/50 bg-emerald-950/20 p-3">
                                         <p className="mb-2 text-xs uppercase tracking-wide text-zinc-400">Replacement Item</p>
                                         <p className="font-medium text-zinc-100">{detail.replacementProductName}</p>
-                                        <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-zinc-300">
+                                        <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-zinc-300">
                                           <span>Qty: {detail.replacementQuantity}</span>
-                                          <span>Price: {formatCurrency(detail.replacementProductPrice)}</span>
                                           <span>Size: {detail.replacementProductSize}</span>
                                           <span>Color: {detail.replacementProductColor}</span>
                                         </div>
@@ -3329,6 +3332,9 @@ export function ReturnManagement() {
                                     <div className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-300">
                                       <Badge className="bg-emerald-500/20 text-emerald-300 border-emerald-500/30">1:1 Even Exchange</Badge>
                                       <Badge className="bg-zinc-800 text-zinc-200">Inventory: {detail.inventory_action}</Badge>
+                                      {detail.customerReason && (
+                                        <Badge className="bg-zinc-800 text-zinc-200">Reason: {detail.customerReason}</Badge>
+                                      )}
                                     </div>
                                   </div>
                                 ))}
@@ -3395,59 +3401,72 @@ export function ReturnManagement() {
                 <p className="text-[10px]">TIN: 432-891-002-000 VAT REGISTERED</p>
                 <p className="text-[10px]">TEL: (034) 435 0128</p>
               </div>
-              <p className="text-center font-bold text-[11px] mt-1 mb-0.5 tracking-wider">ITEM REPLACEMENT / EXCHANGE SLIP</p>
+              <p className="text-center font-bold text-[12px] mt-2 tracking-[0.2em]">EXCHANGE SLIP</p>
+              <p className="text-center text-[9px] tracking-wide">1:1 Even Exchange</p>
 
               {/* ── SLIP METADATA ── */}
-              <p className="text-center text-[10px] tracking-widest my-1">- - - - - - - - - - - - - - - - - -</p>
-              <div className="space-y-0.5 text-[11px]">
-                <div className="flex justify-between"><span>Slip No:</span><span className="font-bold">{printExchangeSlip.display_return_id}</span></div>
-                <div className="flex justify-between"><span>Orig. Receipt:</span><span className="font-bold">{printExchangeSlip.display_sales_id}</span></div>
-                <div className="flex justify-between"><span>Date:</span><span>{printExchangeSlip.return_date}</span></div>
-                <div className="flex justify-between"><span>Processed By:</span><span>{printExchangeSlip.processedBy}</span></div>
-                <div className="flex justify-between"><span>Customer:</span><span>{printExchangeSlip.customerName}</span></div>
+              <div className="border-t border-dashed border-black my-2" />
+              <div className="space-y-0.5 text-[10.5px]">
+                {[
+                  ["Slip No.", printExchangeSlip.display_return_id, true],
+                  ["Orig. Receipt", printExchangeSlip.display_sales_id, true],
+                  ["Date", printExchangeSlip.return_date, false],
+                  ["Customer", printExchangeSlip.customerName, false],
+                  ["Processed By", printExchangeSlip.processedBy, false],
+                ].map(([label, value, bold]) => (
+                  <div key={String(label)} className="flex justify-between gap-2">
+                    <span className="shrink-0">{label}</span>
+                    <span className={`text-right truncate ${bold ? "font-bold" : ""}`}>{value}</span>
+                  </div>
+                ))}
               </div>
 
-              {/* ── ITEM EXCHANGE BREAKDOWN ── */}
-              <p className="text-center text-[10px] tracking-widest my-1">- - - - - - - - - - - - - - - - - -</p>
-              <div className="space-y-2 text-[11px]">
+              {/* ── ITEMS EXCHANGED ── */}
+              <div className="border-t border-dashed border-black my-2" />
+              <div className="space-y-3 text-[10.5px]">
                 {printExchangeSlip.returnDetails.map((detail, idx) => (
                   <div key={idx}>
-                    <p className="font-bold">[RETURNED]</p>
-                    <p className="pl-1 uppercase truncate">{detail.productName}</p>
-                    <p className="text-[10px] pl-1">{detail.productColor} / Size {detail.productSize}</p>
-                    <div className="flex justify-between pl-1">
-                      <span>{detail.quantity_returned} @ {detail.productPrice.toFixed(2)}</span>
-                      <span className="tabular-nums">-{(detail.productPrice * detail.quantity_returned).toFixed(2)}</span>
+                    <p className="font-bold mb-1">
+                      ITEM {idx + 1} · QTY {detail.quantity_returned}
+                    </p>
+                    <div className="grid grid-cols-[56px_1fr] gap-y-1">
+                      <span className="font-semibold">RETURNED</span>
+                      <div className="min-w-0">
+                        <p className="uppercase truncate">{detail.productName}</p>
+                        <p className="text-[9.5px]">{detail.productColor} · Size {detail.productSize}</p>
+                      </div>
+                      <span className="font-semibold">GIVEN</span>
+                      <div className="min-w-0">
+                        <p className="uppercase truncate">{detail.replacementProductName}</p>
+                        <p className="text-[9.5px]">{detail.replacementProductColor} · Size {detail.replacementProductSize}</p>
+                      </div>
                     </div>
-                    <p className="font-bold mt-1">[REPLACEMENT]</p>
-                    <p className="pl-1 uppercase truncate">{detail.replacementProductName}</p>
-                    <p className="text-[10px] pl-1">{detail.replacementProductColor} / Size {detail.replacementProductSize}</p>
-                    <div className="flex justify-between pl-1">
-                      <span>{detail.replacementQuantity} @ {detail.replacementProductPrice.toFixed(2)}</span>
-                      <span className="tabular-nums">+{(detail.replacementProductPrice * detail.replacementQuantity).toFixed(2)}</span>
-                    </div>
-                    {detail.reason && (
-                      <p className="text-[9px] pl-1 mt-0.5">Reason: {detail.reason}</p>
+                    {detail.customerReason && (
+                      <p className="text-[9.5px] mt-1">Reason: {detail.customerReason}</p>
                     )}
+                    <p className="text-[9.5px]">Returned item: {detail.inventory_action}</p>
                   </div>
                 ))}
               </div>
 
               {/* ── EXCHANGE SUMMARY ── */}
-              <p className="text-center text-[10px] tracking-widest my-1">- - - - - - - - - - - - - - - - - -</p>
-              <div className="space-y-0.5 text-[11px]">
+              <div className="border-t border-dashed border-black my-2" />
+              <div className="space-y-0.5 text-[10.5px]">
                 <div className="flex justify-between">
-                  <span>Exchange Policy:</span>
-                  <span className="font-semibold text-right">1:1 Even Exchange</span>
+                  <span>Items Exchanged</span>
+                  <span>
+                    {printExchangeSlip.returnDetails.reduce((sum, detail) => sum + Number(detail.quantity_returned || 0), 0)} pair(s)
+                  </span>
                 </div>
-                <div className="flex justify-between font-bold text-[12px] pt-0.5">
-                  <span>AMOUNT DUE:</span>
+                <div className="flex justify-between font-bold text-[12px] pt-1">
+                  <span>AMOUNT DUE</span>
                   <span className="tabular-nums">PHP 0.00</span>
                 </div>
+                <p className="text-[9px] pt-1 text-center">Same-model swap · No refund · No additional payment</p>
               </div>
 
               {/* ── SIGNATURES ── */}
-              <p className="text-center text-[10px] tracking-widest my-1">- - - - - - - - - - - - - - - - - -</p>
+              <div className="border-t border-dashed border-black my-2" />
               <div className="grid grid-cols-2 gap-4 text-center text-[9px] pt-1">
                 <div>
                   <div className="border-b border-black h-8 mb-1"></div>
@@ -3472,9 +3491,10 @@ export function ReturnManagement() {
               <p className="text-center text-[9px] font-mono">*{printExchangeSlip.display_return_id}*</p>
 
               {/* ── FOOTER ── */}
-              <p className="text-center text-[10px] tracking-widest my-1">- - - - - - - - - - - - - - - - - -</p>
+              <div className="border-t border-dashed border-black my-2" />
               <p className="text-center text-[10px] font-bold tracking-wide">THIS SERVES AS YOUR</p>
               <p className="text-center text-[10px] font-bold tracking-wide">OFFICIAL EXCHANGE SLIP</p>
+              <p className="text-center text-[9px] mt-1">Thank you for shopping at Meryl Shoes!</p>
             </div>
           )}
 

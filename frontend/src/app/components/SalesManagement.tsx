@@ -15,6 +15,7 @@ import { useProducts, useReturns, useSales, useUsers } from "../../lib/hooks";
 import { useAuth } from "../../lib/auth-context";
 import { supabase } from "../../lib/supabase";
 import { writeAuditLog } from "../../lib/audit";
+import { parseReplacementNote, resolveReplacementProduct } from "../../lib/replacement-details";
 import { TablePagination } from "./ui/table-pagination";
 
 type SaleStatus = "Completed" | "Pending" | "Voided";
@@ -56,21 +57,6 @@ function toPaymentStatus(status: SaleStatus): string {
   if (status === "Pending") return "pending";
   if (status === "Voided") return "failed";
   return "completed";
-}
-
-function extractPesoAmount(text: string) {
-  const match = String(text ?? "").match(/(?:customer adds|adds)\s*php\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)/i);
-  if (!match?.[1]) return 0;
-  return Number(match[1].replace(/,/g, "")) || 0;
-}
-
-function normalizeProductName(value: string) {
-  return String(value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-function extractReplacementName(text: string) {
-  const match = String(text ?? "").match(/replacement:\s*([^|]+)/i);
-  return match?.[1]?.trim() ?? "";
 }
 
 function formatCurrency(value: number) {
@@ -185,7 +171,6 @@ export function SalesManagement() {
       if (!salesId) continue;
       const prev = map.get(salesId) ?? { count: 0, additional: 0, credits: 0, lastActivity: null, details: [] };
       const details = Array.isArray(replacement.return_details) ? replacement.return_details : [];
-      const headerAdditional = Number(replacement.additional_payment ?? replacement.total_replacement_payments ?? 0);
       const credits = Number(replacement.total_refund ?? replacement.total_credits_issued ?? 0);
       const activityDate = String(replacement.last_activity_date ?? replacement.return_date ?? replacement.created_at ?? "");
       const prevTs = prev.lastActivity ? new Date(prev.lastActivity).getTime() : 0;
@@ -193,40 +178,32 @@ export function SalesManagement() {
       const mappedDetails = details.map((detail: any) => {
         const returnedProduct = Array.isArray(detail.product) ? detail.product[0] : detail.product;
         const returnedFallback = productMap.get(String(detail.returned_product_id ?? detail.product_id ?? ""));
-        const replacementNameFromNote = extractReplacementName(String(detail.reason ?? ""));
-        const replacementFallback =
-          productMap.get(String(detail.replacement_product_id ?? detail.new_product_id ?? "")) ??
-          [...productMap.values()].find((product) => normalizeProductName(product.name) === normalizeProductName(replacementNameFromNote));
-        const returnedInventory = Array.isArray(returnedProduct?.inventory) ? returnedProduct.inventory[0] : returnedProduct?.inventory;
-        const returnedPrice = Number(detail.returned_price_unit ?? returnedInventory?.srp ?? returnedProduct?.price ?? returnedProduct?.cost_price ?? returnedFallback?.price ?? 0);
-        const replacementPrice = Number(detail.new_price_unit ?? replacementFallback?.price ?? 0);
+        const returnedColor = String(returnedProduct?.color ?? returnedFallback?.color ?? "N/A");
+        const note = parseReplacementNote(detail.reason);
+        const replacementProduct = resolveReplacementProduct(
+          productMap.values(),
+          detail.replacement_product_id ?? detail.new_product_id,
+          note,
+          returnedColor,
+        );
         const returnedQuantity = Number(detail.returned_quantity ?? detail.quantity_returned ?? 0);
         const replacementQuantity = Number(detail.new_quantity ?? detail.replacement_quantity ?? detail.quantity_returned ?? 0);
-        const storedDifference = Number(detail.net_difference ?? detail.price_difference ?? 0);
-        const computedDifference = (replacementPrice * replacementQuantity) - (returnedPrice * returnedQuantity);
         return {
           return_detail_id: String(detail.return_detail_id ?? ""),
           returnedProductName: returnedProduct?.product_name ?? returnedFallback?.name ?? "N/A",
           returnedSize: String(returnedProduct?.size ?? returnedFallback?.size ?? "N/A"),
-          returnedColor: String(returnedProduct?.color ?? returnedFallback?.color ?? "N/A"),
-          returnedPrice,
+          returnedColor,
           returnedQuantity,
-          replacementProductName: replacementFallback?.name ?? "N/A",
-          replacementSize: String(replacementFallback?.size ?? "N/A"),
-          replacementColor: String(replacementFallback?.color ?? "N/A"),
-          replacementPrice,
+          replacementProductName: replacementProduct?.name ?? (note.replacementName || "N/A"),
+          replacementSize: String(replacementProduct?.size ?? (note.replacementSize || "N/A")),
+          replacementColor: String(replacementProduct?.color ?? returnedColor),
           replacementQuantity,
-          priceDifference: storedDifference !== 0 ? storedDifference : computedDifference,
-          inventoryAction: String(detail.inventory_action ?? "Defective / Not Sellable"),
+          customerReason: note.customerReason,
+          inventoryAction: String(detail.inventory_action ?? (note.inventoryAction || "Defective / Not Sellable")),
         };
       });
-      const detailAdditional = mappedDetails.reduce((sum: number, detail: any) => {
-        const byDiff = Math.max(0, Number(detail.priceDifference ?? 0));
-        if (byDiff > 0) return sum + byDiff;
-        const rawDetail = details.find((item: any) => String(item.return_detail_id ?? "") === detail.return_detail_id);
-        return sum + extractPesoAmount(String(rawDetail?.reason ?? ""));
-      }, 0);
-      const additional = detailAdditional > 0 ? detailAdditional : headerAdditional;
+      // Exchanges are strictly 1:1 with no additional payment.
+      const additional = 0;
       map.set(salesId, {
         count: prev.count + (Number(replacement.replacement_count ?? 0) || Math.max(1, details.length || 1)),
         additional: prev.additional + additional,
@@ -1094,9 +1071,8 @@ export function SalesManagement() {
                                             <div className="rounded-md border border-red-900/50 bg-red-950/20 p-3">
                                               <p className="mb-2 text-xs uppercase tracking-wide text-zinc-400">Replaced Item</p>
                                               <p className="font-medium text-zinc-100">{detail.returnedProductName}</p>
-                                              <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-zinc-300">
+                                              <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-zinc-300">
                                                 <span>Qty: {detail.returnedQuantity}</span>
-                                                <span>Price: {formatCurrency(detail.returnedPrice)}</span>
                                                 <span>Size: {detail.returnedSize}</span>
                                                 <span>Color: {detail.returnedColor}</span>
                                               </div>
@@ -1104,17 +1080,19 @@ export function SalesManagement() {
                                             <div className="rounded-md border border-emerald-900/50 bg-emerald-950/20 p-3">
                                               <p className="mb-2 text-xs uppercase tracking-wide text-zinc-400">Replacement Item</p>
                                               <p className="font-medium text-zinc-100">{detail.replacementProductName}</p>
-                                              <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-zinc-300">
+                                              <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-zinc-300">
                                                 <span>Qty: {detail.replacementQuantity}</span>
-                                                <span>Price: {formatCurrency(detail.replacementPrice)}</span>
                                                 <span>Size: {detail.replacementSize}</span>
                                                 <span>Color: {detail.replacementColor}</span>
                                               </div>
                                             </div>
                                           </div>
                                           <div className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-300">
-                                            <Badge className="bg-zinc-800 text-zinc-200">Difference: {formatCurrency(detail.priceDifference)}</Badge>
+                                            <Badge className="bg-emerald-500/20 text-emerald-300 border-emerald-500/30">1:1 Even Exchange</Badge>
                                             <Badge className="bg-zinc-800 text-zinc-200">Inventory: {detail.inventoryAction}</Badge>
+                                            {detail.customerReason && (
+                                              <Badge className="bg-zinc-800 text-zinc-200">Reason: {detail.customerReason}</Badge>
+                                            )}
                                           </div>
                                         </div>
                                       ))}
@@ -1135,12 +1113,6 @@ export function SalesManagement() {
                                       <div className="flex justify-between text-emerald-400 font-medium">
                                         <span>Total Discount:</span>
                                         <span>-{formatCurrency(totalDiscount)}</span>
-                                      </div>
-                                    )}
-                                    {sale.replacementPayments > 0 && (
-                                      <div className="flex justify-between text-amber-300 font-medium">
-                                        <span>Replacement Additional Payments:</span>
-                                        <span>+{formatCurrency(sale.replacementPayments)}</span>
                                       </div>
                                     )}
                                   </div>
