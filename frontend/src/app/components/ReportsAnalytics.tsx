@@ -3219,6 +3219,18 @@ export function ReportsAnalytics() {
                   </div>
                 </CardHeader>
                 <CardContent className="rounded-b-lg bg-[#07070a] pt-4">
+                  <div className="mb-2 flex flex-wrap items-center justify-end gap-x-5 gap-y-1 text-xs text-white/65">
+                    <span className="inline-flex items-center gap-2">
+                      <svg width="22" height="8" aria-hidden="true"><line x1="0" y1="4" x2="22" y2="4" stroke="#facc15" strokeWidth="2" /></svg>
+                      {isRevenue ? 'Revenue' : 'Pairs sold'} per {bucketNoun}
+                    </span>
+                    {average > 0 && (
+                      <span className="inline-flex items-center gap-2">
+                        <svg width="22" height="8" aria-hidden="true"><line x1="0" y1="4" x2="22" y2="4" stroke="#6b7280" strokeWidth="1.5" strokeDasharray="4 4" /></svg>
+                        Average ({isRevenue ? money(average) : `${average.toFixed(1)} pairs`})
+                      </span>
+                    )}
+                  </div>
                   <ResponsiveContainer width="100%" height={300}>
                     <LineChart data={points} margin={{ top: 24, right: 24, left: 4, bottom: 8 }}>
                       <CartesianGrid stroke="#1c1c24" vertical={false} />
@@ -3249,7 +3261,6 @@ export function ReportsAnalytics() {
                           y={average}
                           stroke="#6b7280"
                           strokeDasharray="4 4"
-                          label={{ value: `Avg ${isRevenue ? shortAmount(average) : average.toFixed(1)}`, position: 'insideTopRight', fill: '#9ca3af', fontSize: 11 }}
                         />
                       )}
                       <Line
