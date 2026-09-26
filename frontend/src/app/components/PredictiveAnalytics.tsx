@@ -751,43 +751,53 @@ export function PredictiveAnalytics() {
       return Math.max(1, Math.round((endDate.getTime() - startDate.getTime()) / 86400000) + 1);
     };
 
-    const buildPeriodBuckets = (period: RevenueTrendPeriod, start: Date) => {
+    const bucketFor = (date: Date, period: RevenueTrendPeriod) => {
+      if (period === "weekly") {
+        const bucketDate = startOfWeek(date);
+        return { key: localDateKey(bucketDate), date: bucketDate, label: labelForPeriodDate(bucketDate, period) };
+      }
+      if (period === "monthly") {
+        const bucketDate = new Date(date.getFullYear(), date.getMonth(), 1);
+        return { key: localDateKey(bucketDate).slice(0, 7), date: bucketDate, label: labelForPeriodDate(bucketDate, period) };
+      }
+      if (period === "quarterly") {
+        const quarter = getQuarter(date);
+        const bucketDate = new Date(date.getFullYear(), (quarter - 1) * 3, 1);
+        return { key: `${date.getFullYear()}-Q${quarter}`, date: bucketDate, label: labelForPeriodDate(bucketDate, period) };
+      }
+      if (period === "annually") {
+        const bucketDate = new Date(date.getFullYear(), 0, 1);
+        return { key: String(date.getFullYear()), date: bucketDate, label: labelForPeriodDate(bucketDate, period) };
+      }
+      const bucketDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+      return { key: localDateKey(bucketDate), date: bucketDate, label: formatShortDate(bucketDate) };
+    };
+
+    // includeEmptyPeriods: add every day/week/month in the range with zero
+    // revenue, so periods without sales still appear on the chart.
+    const buildPeriodBuckets = (period: RevenueTrendPeriod, start: Date, includeEmptyPeriods = false) => {
       const buckets = new Map<string, { key: string; date: Date; label: string; revenue: number; units: number }>();
+      if (includeEmptyPeriods) {
+        let cursor = bucketFor(start, period).date;
+        while (cursor <= now) {
+          const bucket = bucketFor(cursor, period);
+          buckets.set(bucket.key, { ...bucket, revenue: 0, units: 0 });
+          cursor = addPeriod(bucket.date, period);
+        }
+      }
       dailyRows
         .filter((row) => row.date >= start)
         .forEach((row) => {
-        let key = localDateKey(row.date);
-        let label = formatShortDate(row.date);
-        let bucketDate = new Date(row.date);
-
-        if (period === "weekly") {
-          bucketDate = startOfWeek(row.date);
-          key = localDateKey(bucketDate);
-          label = labelForPeriodDate(bucketDate, period);
-        } else if (period === "monthly") {
-          bucketDate = new Date(row.date.getFullYear(), row.date.getMonth(), 1);
-          key = `${row.date.getFullYear()}-${String(row.date.getMonth() + 1).padStart(2, "0")}`;
-          label = labelForPeriodDate(bucketDate, period);
-        } else if (period === "quarterly") {
-          const quarter = getQuarter(row.date);
-          bucketDate = new Date(row.date.getFullYear(), (quarter - 1) * 3, 1);
-          key = `${row.date.getFullYear()}-Q${quarter}`;
-          label = labelForPeriodDate(bucketDate, period);
-        } else if (period === "annually") {
-          bucketDate = new Date(row.date.getFullYear(), 0, 1);
-          key = String(row.date.getFullYear());
-          label = labelForPeriodDate(bucketDate, period);
-        }
-
-        const bucket = buckets.get(key) ?? { key, date: bucketDate, label, revenue: 0, units: 0 };
-        bucket.revenue += row.revenue;
-        bucket.units += row.units;
-        buckets.set(key, bucket);
-      });
+          const { key, date: bucketDate, label } = bucketFor(row.date, period);
+          const bucket = buckets.get(key) ?? { key, date: bucketDate, label, revenue: 0, units: 0 };
+          bucket.revenue += row.revenue;
+          bucket.units += row.units;
+          buckets.set(key, bucket);
+        });
       return Array.from(buckets.values()).sort((a, b) => a.date.getTime() - b.date.getTime());
     };
 
-    const trendChart = buildPeriodBuckets(revenueTrendPeriod, getPeriodStart(revenueTrendPeriod))
+    const trendChart = buildPeriodBuckets(revenueTrendPeriod, getPeriodStart(revenueTrendPeriod), true)
       .map((row) => ({
         date: row.label,
         revenue: Math.round(row.revenue),
@@ -1375,7 +1385,7 @@ export function PredictiveAnalytics() {
   const filterTabs = [
     { id: "product" as const, label: "Product Analytics", icon: Package, count: analytics.productMovement.length },
     { id: "customer" as const, label: "Customer Analytics", icon: Users, count: analytics.genderRows.length },
-    { id: "sales" as const, label: "Sales Analytics", icon: TrendingUp, count: analytics.trendChart.length },
+    { id: "sales" as const, label: "Sales Analytics", icon: TrendingUp, count: analytics.trendChart.filter((row) => row.revenue > 0).length },
     { id: "promotion" as const, label: "Promotion Analytics", icon: Sparkles, count: analytics.promotionPerformance.length },
   ];
 
@@ -1444,20 +1454,47 @@ export function PredictiveAnalytics() {
             </div>
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={280}>
-              <BarChart data={analytics.trendChart} margin={{ top: 12, right: 10, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#2f2f38" />
-                <XAxis dataKey="date" stroke="#a3a3a3" fontSize={12} />
-                <YAxis stroke="#a3a3a3" fontSize={12} />
+            {(() => {
+              const tooltip = (
                 <Tooltip
                   contentStyle={{ backgroundColor: "#16161C", border: "1px solid rgba(255, 255, 255, 0.15)", borderRadius: "12px", boxShadow: "0 8px 24px rgba(0,0,0,0.6)", padding: "10px 14px", color: "#FFFFFF" }}
                   labelStyle={{ color: "#FFFFFF", fontWeight: 600, fontSize: 13, marginBottom: 4 }}
                   itemStyle={{ color: "#FFFFFF", fontSize: 12, fontWeight: 500 }}
                   formatter={(value: any) => [money(Number(value)), "Revenue"]}
                 />
-                <Bar dataKey="revenue" fill="#facc15" radius={[8, 8, 0, 0]} name="Revenue" />
-              </BarChart>
-            </ResponsiveContainer>
+              );
+              // Daily and weekly show a continuous trend line; longer periods compare totals as bars.
+              const showLine = revenueTrendPeriod === "daily" || revenueTrendPeriod === "weekly";
+              return (
+                <ResponsiveContainer width="100%" height={280}>
+                  {showLine ? (
+                    <LineChart data={analytics.trendChart} margin={{ top: 12, right: 16, left: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#2f2f38" vertical={false} />
+                      <XAxis dataKey="date" stroke="#a3a3a3" fontSize={12} minTickGap={24} tickMargin={8} />
+                      <YAxis stroke="#a3a3a3" fontSize={12} allowDecimals={false} />
+                      {tooltip}
+                      <Line
+                        type="monotone"
+                        dataKey="revenue"
+                        stroke="#facc15"
+                        strokeWidth={3}
+                        dot={{ r: 3, fill: "#16161d", stroke: "#facc15", strokeWidth: 2 }}
+                        activeDot={{ r: 6, fill: "#facc15", stroke: "#16161d", strokeWidth: 2 }}
+                        name="Revenue"
+                      />
+                    </LineChart>
+                  ) : (
+                    <BarChart data={analytics.trendChart} margin={{ top: 12, right: 10, left: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#2f2f38" />
+                      <XAxis dataKey="date" stroke="#a3a3a3" fontSize={12} />
+                      <YAxis stroke="#a3a3a3" fontSize={12} />
+                      {tooltip}
+                      <Bar dataKey="revenue" fill="#facc15" radius={[8, 8, 0, 0]} name="Revenue" />
+                    </BarChart>
+                  )}
+                </ResponsiveContainer>
+              );
+            })()}
           </CardContent>
         </Card>
 
