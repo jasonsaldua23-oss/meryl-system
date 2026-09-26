@@ -118,12 +118,11 @@ export function RealtimeSyncListener() {
     // Realtime change events are filtered by RLS using the Supabase JWT, so
     // username/password sessions (identified by the x-meryl-session header)
     // rely on this polling for cross-device updates.
-    const pollingKeys = ["sales", "inventory", "products", "customers", "returns", "promotions", "notifications"];
+    // Every query on screen is refreshed (inventory log, payments, users,
+    // categories, analytics... not just a fixed list); hidden ones stay cached.
     const interval = setInterval(() => {
       if (typeof document !== "undefined" && document.visibilityState === "visible") {
-        pollingKeys.forEach((key) => {
-          queryClient.invalidateQueries({ queryKey: [key], refetchType: "active" });
-        });
+        queryClient.invalidateQueries({ refetchType: "active" });
       }
     }, 10000);
 

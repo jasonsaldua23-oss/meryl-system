@@ -14,20 +14,25 @@ export function AuditLogViewer() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedFilter, setSelectedFilter] = useState<"ALL" | "AUTH" | "PRODUCT" | "POS">("ALL");
 
-  const loadLogs = async () => {
-    setLoading(true);
+  const loadLogs = async (quiet = false) => {
+    if (!quiet) setLoading(true);
     try {
       const data = await fetchAuditLogs(150);
       setLogs(data);
     } catch {
-      toast.error("Failed to fetch audit logs.");
+      if (!quiet) toast.error("Failed to fetch audit logs.");
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   };
 
   useEffect(() => {
     loadLogs();
+    // Pick up actions from other tabs and devices, like the rest of the app.
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void loadLogs(true);
+    }, 10000);
+    return () => window.clearInterval(timer);
   }, []);
 
   const filteredLogs = useMemo(() => {
@@ -124,7 +129,7 @@ export function AuditLogViewer() {
             <Button
               variant="outline"
               size="sm"
-              onClick={loadLogs}
+              onClick={() => loadLogs()}
               disabled={loading}
               className="border-[#303042] bg-[#1a1a27] text-yellow-200 hover:bg-[#252538] text-xs h-9"
             >
