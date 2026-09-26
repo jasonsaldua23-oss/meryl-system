@@ -12,6 +12,8 @@ import { attributeSaleLine, promotionBoundaryMs, promotionDisplayName, promotion
 import { shortId } from './ui/utils';
 import { localDateKey as localDayKey, parseDbTimestamp } from '../../lib/datetime';
 import { useAuth } from '../../lib/auth-context';
+import { loadReportLogo, REPORT_STORE } from '../../lib/report-branding';
+import type { Font as ExcelFont } from 'exceljs';
 
 function isCompletedSale(sale: any) {
   const payment = Array.isArray(sale.payment) ? sale.payment[0] : sale.payment;
@@ -2125,7 +2127,9 @@ export function ReportsAnalytics() {
     });
   }, [customEndDate, customStartDate, salesRows, stockBySku, timeRange]);
 
-  const handleExportReport = () => {
+  const handleExportReport = async () => {
+    // Store logo in black and white, as on the printed receipts.
+    const logo = await loadReportLogo();
     const reportNames: Record<string, string> = {
       overview: 'Executive Overview Report',
       sales: 'Sales Breakdown Report',
@@ -2168,9 +2172,11 @@ export function ReportsAnalytics() {
     const rect = (x: number, rectY: number, width: number, height: number, fill = '1 1 1', stroke = '0.85 0.85 0.85') => {
       add(`q ${fill} rg ${stroke} RG ${x} ${rectY} ${width} ${height} re B Q`);
     };
-    const line = (x1: number, y1: number, x2: number, y2: number, color = '0.96 0.78 0.08') => {
-      add(`q ${color} RG 2 w ${x1} ${y1} m ${x2} ${y2} l S Q`);
+    const line = (x1: number, y1: number, x2: number, y2: number, color = '0 0 0', width = 1.5) => {
+      add(`q ${color} RG ${width} w ${x1} ${y1} m ${x2} ${y2} l S Q`);
     };
+    const logoHeight = 44;
+    const logoWidth = logo ? (logoHeight * logo.width) / logo.height : 0;
     const truncate = (value: unknown, max: number) => {
       const clean = sanitize(value);
       return clean.length > max ? `${clean.slice(0, Math.max(0, max - 3))}...` : clean;
@@ -2201,18 +2207,29 @@ export function ReportsAnalytics() {
     };
     const drawHeader = (full = true) => {
       if (full) {
-        text('MERYL SHOES', margin, y, 10, true, '0.55 0.42 0');
-        y -= 22;
-        text(reportNames[reportType] ?? 'Meryl Shoes Report', margin, y, 24, true);
-        y -= 16;
-        text('Araneta Ave, Bacolod, 6100 Negros Occidental', margin, y, 10, false, '0.25 0.25 0.25');
-        y -= 18;
+        // Letterhead: logo, store details, then the report title.
+        const top = y + 8;
+        if (logo) add(`q ${logoWidth.toFixed(2)} 0 0 ${logoHeight} ${margin} ${top - logoHeight} cm /Im1 Do Q`);
+        const infoX = margin + (logo ? logoWidth + 16 : 0);
+        text(REPORT_STORE.name, infoX, top - 12, 12, true);
+        text(REPORT_STORE.tagline, infoX, top - 24, 8, false, '0.3 0.3 0.3');
+        text(REPORT_STORE.address, infoX, top - 34, 8, false, '0.3 0.3 0.3');
+        text(REPORT_STORE.contact, infoX, top - 44, 8, false, '0.3 0.3 0.3');
+        y = top - logoHeight - 12;
+        line(margin, y, pageWidth - margin, y, '0 0 0', 1.5);
+        y -= 26;
+        text(reportNames[reportType] ?? 'Meryl Shoes Report', margin, y, 20, true);
+        y -= 14;
+        text(`Period: ${selectedRangeLabel}   |   Generated: ${generatedAt}   |   Prepared by: ${businessSummary.preparedBy}`, margin, y, 8, false, '0.35 0.35 0.35');
+        y -= 10;
+        line(margin, y, pageWidth - margin, y, '0.75 0.75 0.75', 0.5);
+        y -= 20;
       } else {
-        text(reportNames[reportType] ?? 'Meryl Shoes Report', margin, y, 10, true, '0.35 0.35 0.35');
+        text(`${REPORT_STORE.name}  -  ${reportNames[reportType] ?? 'Report'}`, margin, y, 9, true, '0.35 0.35 0.35');
+        y -= 8;
+        line(margin, y, pageWidth - margin, y, '0.75 0.75 0.75', 0.5);
         y -= 18;
       }
-      line(margin, y, pageWidth - margin, y);
-      y -= 18;
     };
     const drawMetric = (label: string, value: string, x: number, metricY: number, width: number) => {
       rect(x, metricY - 52, width, 52, '0.98 0.98 0.98');
@@ -2269,17 +2286,18 @@ export function ReportsAnalytics() {
     };
 
     drawHeader();
+    // Period, generation time and preparer are in the letterhead; boxes hold figures.
     drawMetricGrid([
-      ['Date Range', selectedRangeLabel],
       ['Revenue', money(currentMetrics.current.revenue)],
-      ['Units Sold', currentMetrics.current.units.toLocaleString()],
-      ['Generated', generatedAt],
+      ['Pairs Sold', currentMetrics.current.units.toLocaleString()],
+      ['Transactions', currentMetrics.current.transactions.toLocaleString()],
+      ['Avg Order Value', money(currentMetrics.current.aov)],
     ]);
     drawMetricGrid([
+      ['Gross Profit', money(currentMetrics.current.grossProfit)],
+      ['Gross Margin', `${currentMetrics.current.margin.toFixed(1)}%`],
       ['Inventory Turnover', `${latestTurnover.toFixed(2)}x`],
       ['Avg Days to Sell', String(latestAvgDays || 0)],
-      ['Transactions', currentMetrics.current.transactions.toLocaleString()],
-      ['Report Type', reportNames[reportType] ?? 'Report'],
     ]);
 
     if (reportType === 'overview') {
@@ -2443,7 +2461,8 @@ export function ReportsAnalytics() {
     }
 
     pages.forEach((page, index) => {
-      page.push(`BT /F1 8 Tf ${margin} 24 Td (Prepared by Store Manager) Tj ET`);
+      page.push(`q 0.75 0.75 0.75 RG 0.5 w ${margin} 36 m ${pageWidth - margin} 36 l S Q`);
+      page.push(`BT /F1 8 Tf ${margin} 24 Td (${pdfEscape(`${REPORT_STORE.name} - Prepared by ${businessSummary.preparedBy}`)}) Tj ET`);
       page.push(`BT /F1 8 Tf ${pageWidth - margin - 68} 24 Td (Page ${index + 1} of ${pages.length}) Tj ET`);
     });
 
@@ -2451,11 +2470,15 @@ export function ReportsAnalytics() {
       '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
       '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>',
     ];
+    // Logo as object 3: JPEG kept ASCII-safe with ASCIIHexDecode (the PDF is built as text).
+    const imageResource = logo
+      ? ` /XObject << /Im1 ${objects.push(`<< /Type /XObject /Subtype /Image /Width ${logo.width} /Height ${logo.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter [/ASCIIHexDecode /DCTDecode] /Length ${logo.jpegHex.length + 1} >>\nstream\n${logo.jpegHex}>\nendstream`)} 0 R >>`
+      : '';
     const pageObjectNumbers: number[] = [];
     pages.forEach((page) => {
       const stream = page.join('\n');
       const contentObject = objects.push(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
-      const pageObject = objects.push(`<< /Type /Page /Parent PAGES_REF /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 1 0 R /F2 2 0 R >> >> /Contents ${contentObject} 0 R >>`);
+      const pageObject = objects.push(`<< /Type /Page /Parent PAGES_REF /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 1 0 R /F2 2 0 R >>${imageResource} >> /Contents ${contentObject} 0 R >>`);
       pageObjectNumbers.push(pageObject);
     });
     const pagesObject = objects.push(`<< /Type /Pages /Kids [${pageObjectNumbers.map((num) => `${num} 0 R`).join(' ')}] /Count ${pageObjectNumbers.length} >>`);
@@ -2522,7 +2545,7 @@ export function ReportsAnalytics() {
   const avgDaysChange = previousAvgDays ? previousAvgDays - latestAvgDays : 0;
   const selectedRangeLabel = formatDateRange(selectedWindow.start, selectedWindow.now);
 
-  const handleExportCSV = () => {
+  const handleExportCSV = async () => {
     try {
       const reportNames: Record<string, string> = {
         overview: 'Executive Overview Report',
@@ -2541,18 +2564,10 @@ export function ReportsAnalytics() {
         inventory: 'Inventory & Stock Report',
       };
 
-      const csvEscape = (val: unknown) => {
-        if (val === null || val === undefined) return '';
-        const str = String(val).trim();
-        if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
-          return `"${str.replace(/"/g, '""')}"`;
-        }
-        return str;
-      };
-
-      const formatRow = (row: unknown[]) => row.map(csvEscape).join(',');
-
-      const lines: string[] = [];
+      // Rows of cells; '' is a blank row. "=== TITLE ===" rows start a section
+      // and the row after them is that section's column header.
+      const formatRow = (row: unknown[]) => row;
+      const lines: Array<unknown[] | ''> = [];
       const title = reportNames[reportType] ?? 'Meryl Shoes Business Report';
       const timestamp = new Date().toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' });
 
@@ -2565,16 +2580,6 @@ export function ReportsAnalytics() {
       const prevTx = Number(currentMetrics.previous?.transactions ?? 0);
       const curAov = curTx > 0 ? curRev / curTx : 0;
       const prevAov = prevTx > 0 ? prevRev / prevTx : 0;
-
-      // Metadata Header
-      lines.push(formatRow(['MERYL SHOES ENTERPRISE SYSTEM']));
-      lines.push(formatRow([title]));
-      lines.push(formatRow(['Branch', 'Araneta Ave, Bacolod, 6100 Negros Occidental']));
-      lines.push(formatRow(['Date Range', selectedRangeLabel]));
-      lines.push(formatRow(['Report Period Preset', String(timeRange).toUpperCase()]));
-      lines.push(formatRow(['Generated At', timestamp]));
-      lines.push(formatRow(['Prepared By', 'Store Manager']));
-      lines.push('');
 
       // Section 1: Executive KPI Metrics
       lines.push(formatRow(['=== EXECUTIVE KEY PERFORMANCE INDICATORS ===']));
@@ -2881,11 +2886,100 @@ export function ReportsAnalytics() {
         lines.push('');
       }
 
-      // Add UTF-8 BOM so Excel opens accented characters and symbols properly
-      const csvContent = '\uFEFF' + lines.join('\r\n');
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      // Formatted Excel workbook: letterhead with the black-and-white logo,
+      // bold section titles, shaded headers, numbers as numbers, fitted columns.
+      const [{ default: ExcelJS }, logo] = await Promise.all([import('exceljs'), loadReportLogo()]);
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = businessSummary.preparedBy;
+      workbook.created = new Date();
+      const sheet = workbook.addWorksheet(title.replace(/[\\/?*[\]:]/g, '').slice(0, 31) || 'Report', {
+        pageSetup: { paperSize: 9, orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+        views: [{ showGridLines: false }],
+      });
+
+      // Letterhead: logo in A1:B4, store details beside it, then the report title.
+      const logoRows = 4;
+      for (let r = 1; r <= logoRows; r += 1) sheet.getRow(r).height = 18;
+      if (logo) {
+        const imageId = workbook.addImage({ base64: logo.pngDataUrl, extension: 'png' });
+        const heightPx = logoRows * 24;
+        sheet.addImage(imageId, { tl: { col: 0, row: 0 }, ext: { width: (heightPx * logo.width) / logo.height, height: heightPx } });
+      }
+      const info: Array<[string, Partial<ExcelFont>]> = [
+        [REPORT_STORE.name, { bold: true, size: 14 }],
+        [REPORT_STORE.tagline, { size: 9, color: { argb: 'FF555555' } }],
+        [REPORT_STORE.address, { size: 9, color: { argb: 'FF555555' } }],
+        [REPORT_STORE.contact, { size: 9, color: { argb: 'FF555555' } }],
+      ];
+      info.forEach(([value, font], index) => {
+        const cell = sheet.getCell(index + 1, 3);
+        cell.value = value;
+        cell.font = font;
+      });
+      const titleRow = sheet.getRow(logoRows + 2);
+      titleRow.getCell(1).value = title;
+      titleRow.getCell(1).font = { bold: true, size: 16 };
+      titleRow.height = 24;
+      const metaRow = sheet.getRow(logoRows + 3);
+      metaRow.getCell(1).value = `Period: ${selectedRangeLabel}   |   Generated: ${timestamp}   |   Prepared by: ${businessSummary.preparedBy}`;
+      metaRow.getCell(1).font = { size: 9, color: { argb: 'FF555555' } };
+
+      let rowIndex = logoRows + 5;
+      let columnCount = 1;
+      let headerCells: string[] = [];
+      let expectHeader = false;
+      const widths: number[] = [];
+      const isNumeric = (value: unknown) => typeof value === 'number' || (typeof value === 'string' && /^-?\d+(\.\d+)?$/.test(value.trim()));
+      lines.forEach((entry) => {
+        if (entry === '') {
+          rowIndex += 1;
+          return;
+        }
+        const cells = entry as unknown[];
+        const first = String(cells[0] ?? '');
+        const row = sheet.getRow(rowIndex);
+        if (cells.length === 1 && /^===.*===$/.test(first.trim())) {
+          const cell = row.getCell(1);
+          cell.value = first.replace(/^=+\s*|\s*=+$/g, '');
+          cell.font = { bold: true, size: 12 };
+          cell.border = { bottom: { style: 'medium', color: { argb: 'FF000000' } } };
+          expectHeader = true;
+        } else if (expectHeader) {
+          headerCells = cells.map((c) => String(c ?? ''));
+          cells.forEach((value, col) => {
+            const cell = row.getCell(col + 1);
+            cell.value = String(value ?? '');
+            cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F1F1F' } };
+            cell.alignment = { vertical: 'middle', horizontal: col === 0 ? 'left' : 'center', wrapText: true };
+          });
+          expectHeader = false;
+        } else {
+          cells.forEach((value, col) => {
+            const cell = row.getCell(col + 1);
+            const header = headerCells[col] ?? '';
+            if (isNumeric(value)) {
+              cell.value = Number(value);
+              cell.numFmt = /php|revenue|sales|price|valuation|amount|value|collected|discount/i.test(header) ? '#,##0.00' : '#,##0';
+              cell.alignment = { horizontal: 'right' };
+            } else {
+              cell.value = String(value ?? '');
+            }
+            cell.border = { bottom: { style: 'thin', color: { argb: 'FFDDDDDD' } } };
+            widths[col] = Math.max(widths[col] ?? 0, String(value ?? '').length);
+          });
+        }
+        columnCount = Math.max(columnCount, cells.length);
+        rowIndex += 1;
+      });
+      for (let col = 0; col < Math.max(columnCount, 3); col += 1) {
+        sheet.getColumn(col + 1).width = Math.min(60, Math.max(col === 0 ? 28 : 14, (widths[col] ?? 0) + 2));
+      }
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       const url = URL.createObjectURL(blob);
-      const filename = `${(reportNames[reportType] ?? 'report').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${timeRange}.csv`;
+      const filename = `${(reportNames[reportType] ?? 'report').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${timeRange}.xlsx`;
       const link = document.createElement('a');
       link.href = url;
       link.setAttribute('download', filename);
@@ -2893,10 +2987,10 @@ export function ReportsAnalytics() {
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
-      toast.success('CSV report spreadsheet downloaded successfully.');
+      toast.success('Excel report downloaded.');
     } catch (err: any) {
-      console.error('Failed to export CSV report:', err);
-      toast.error(`CSV Export failed: ${err?.message ?? 'Unknown error'}`);
+      console.error('Failed to export Excel report:', err);
+      toast.error(`Excel export failed: ${err?.message ?? 'Unknown error'}`);
     }
   };
 
@@ -3010,7 +3104,7 @@ export function ReportsAnalytics() {
             className="h-9 border-yellow-400/40 text-yellow-400 hover:bg-yellow-400/10 hover:text-yellow-300 cursor-pointer"
           >
             <FileSpreadsheet className="w-4 h-4 mr-2" />
-            Export CSV
+            Export Excel
           </Button>
         </div>
       </div>
@@ -4767,35 +4861,57 @@ export function ReportsAnalytics() {
                 <Table className="rounded-lg border border-[#24242d] bg-[#07070a]">
                   <TableHeader className="bg-[#0b0b0f]">
                     <TableRow className="border-[#24242d] hover:bg-[#0b0b0f]">
-                      <TableHead className="text-yellow-300">Promotion</TableHead>
-                      <TableHead className="text-yellow-300">Status</TableHead>
+                      <TableHead className="text-yellow-300 text-center">Promotion</TableHead>
+                      <TableHead className="text-yellow-300 text-center">Status</TableHead>
                       <TableHead className="text-yellow-300 text-center">Transactions</TableHead>
                       <TableHead className="text-yellow-300 text-center">Pairs</TableHead>
-                      <TableHead className="text-yellow-300 text-right">Net Sales</TableHead>
-                      <TableHead className="text-yellow-300 text-right">Discount Given</TableHead>
-                      <TableHead className="text-yellow-300 min-w-[180px]">Goal Progress</TableHead>
+                      <TableHead className="text-yellow-300 text-center">Net Sales</TableHead>
+                      <TableHead className="text-yellow-300 text-center">Discount Given</TableHead>
+                      <TableHead className="text-yellow-300 text-center">Goal Progress</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {promotionReport.rows.map((row) => (
                       <TableRow key={row.id} className="border-[#24242d] bg-[#07070a] hover:bg-white/[0.03]">
-                        <TableCell>
+                        <TableCell className="text-center">
                           <p className="font-medium text-white">{row.name}</p>
                           <p className="text-xs text-white/50">{row.offer} · {row.window}</p>
                         </TableCell>
-                        <TableCell className="text-white/80">{row.status}</TableCell>
+                        <TableCell className="text-center">
+                          <span
+                            className={`inline-block rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+                              {
+                                Active: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
+                                Upcoming: 'border-sky-500/40 bg-sky-500/10 text-sky-300',
+                                Paused: 'border-zinc-600 bg-zinc-800 text-zinc-300',
+                                Ended: 'border-zinc-700 bg-transparent text-zinc-400',
+                              }[row.status] ?? 'border-zinc-700 text-zinc-300'
+                            }`}
+                          >
+                            {row.status}
+                          </span>
+                        </TableCell>
                         <TableCell className="text-center text-white/80">{row.transactions}</TableCell>
                         <TableCell className="text-center text-white/80">{row.pairs}</TableCell>
-                        <TableCell className="text-right text-yellow-200">{money(row.net)}</TableCell>
-                        <TableCell className="text-right text-white/80">{money(row.discount)}</TableCell>
-                        <TableCell>
+                        <TableCell className="text-center font-medium text-yellow-200">{money(row.net)}</TableCell>
+                        <TableCell className="text-center text-white/80">{money(row.discount)}</TableCell>
+                        <TableCell className="text-center">
                           {row.goal > 0 ? (
-                            <div>
-                              <div className="h-1.5 overflow-hidden rounded-full bg-[#24242d]">
-                                <div className="h-full rounded-full bg-yellow-400" style={{ width: `${Math.min(100, row.progress)}%` }} />
+                            <div className="inline-flex flex-col items-center gap-1" title={`${money(row.campaignNet)} of ${money(row.goal)} for the whole campaign`}>
+                              <div className="flex items-center gap-2">
+                                <div className="h-2 w-24 overflow-hidden rounded-full bg-[#24242d]">
+                                  <div
+                                    className={`h-full rounded-full ${row.progress >= 100 ? 'bg-emerald-400' : 'bg-yellow-400'}`}
+                                    style={{ width: `${Math.max(3, Math.min(100, row.progress))}%` }}
+                                  />
+                                </div>
+                                <span className={`w-10 text-left text-xs font-semibold tabular-nums ${row.progress >= 100 ? 'text-emerald-300' : 'text-white'}`}>
+                                  {row.progress >= 1000 ? '999+' : row.progress.toFixed(0)}%
+                                </span>
                               </div>
-                              <p className="mt-1 text-xs text-white/60">
-                                {row.progress.toFixed(0)}% · {money(row.campaignNet)} of {money(row.goal)}
+                              <p className="text-[11px] text-white/45">
+                                {moneyCompact(row.campaignNet)} of {moneyCompact(row.goal)}
+                                {row.progress >= 100 ? ' · Goal met' : ''}
                               </p>
                             </div>
                           ) : (

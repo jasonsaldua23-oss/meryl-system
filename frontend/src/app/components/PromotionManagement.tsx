@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from './ui/dialog';
+import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from './ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { Badge } from './ui/badge';
@@ -1512,11 +1512,11 @@ export function PromotionManagement() {
                   Create Promotion
                 </Button>
               </DialogTrigger>
-              <DialogContent className="bg-[#15161d] border-[#2a2c36] text-yellow-100 max-w-2xl max-h-[88vh] overflow-hidden p-0 shadow-2xl">
+              <DialogContent className="bg-[#15161d] border-[#2a2c36] text-yellow-100 sm:max-w-3xl max-h-[90vh] overflow-hidden p-0 shadow-2xl">
                 <DialogHeader className="border-b border-white/10 bg-[#171821] px-6 py-5">
                   <DialogTitle className="text-white text-xl">Create New Promotion</DialogTitle>
                 </DialogHeader>
-                <div className="max-h-[calc(88vh-10rem)] overflow-y-auto px-6 py-5 pr-4 [scrollbar-width:thin] [scrollbar-color:#facc15_#20212a]">
+                <div className="max-h-[calc(90vh-9.5rem)] overflow-y-auto px-6 py-5 pr-4 [scrollbar-width:thin] [scrollbar-color:#facc15_#20212a]">
                   <PromotionForm
                     formData={formData}
                     setFormData={setFormData}
@@ -1525,6 +1525,9 @@ export function PromotionManagement() {
                   />
                 </div>
                 <DialogFooter className="border-t border-white/10 bg-[#171821]/95 px-6 py-4">
+                  <DialogClose asChild>
+                    <Button type="button" variant="outline" className="border-[#343444] bg-transparent text-yellow-200 hover:bg-[#202030]">Cancel</Button>
+                  </DialogClose>
                   <Button
                     onClick={handleAddPromotion}
                     disabled={isSavingPromotion}
@@ -1813,11 +1816,11 @@ export function PromotionManagement() {
                                 <span className="text-xs">Edit</span>
                               </Button>
                             </DialogTrigger>
-                            <DialogContent className="bg-[#15161d] border-[#2a2c36] text-yellow-100 max-w-2xl max-h-[88vh] overflow-hidden p-0 shadow-2xl">
+                            <DialogContent className="bg-[#15161d] border-[#2a2c36] text-yellow-100 sm:max-w-3xl max-h-[90vh] overflow-hidden p-0 shadow-2xl">
                               <DialogHeader className="border-b border-white/10 bg-[#171821] px-6 py-5">
                                 <DialogTitle className="text-white text-xl">Edit Promotion</DialogTitle>
                               </DialogHeader>
-                              <div className="max-h-[calc(88vh-10rem)] overflow-y-auto px-6 py-5 pr-4 [scrollbar-width:thin] [scrollbar-color:#facc15_#20212a]">
+                              <div className="max-h-[calc(90vh-9.5rem)] overflow-y-auto px-6 py-5 pr-4 [scrollbar-width:thin] [scrollbar-color:#facc15_#20212a]">
                                 <PromotionForm
                                   formData={formData}
                                   setFormData={setFormData}
@@ -1826,6 +1829,9 @@ export function PromotionManagement() {
                                 />
                               </div>
                               <DialogFooter className="border-t border-white/10 bg-[#171821]/95 px-6 py-4">
+                                <DialogClose asChild>
+                                  <Button type="button" variant="outline" className="border-[#343444] bg-transparent text-yellow-200 hover:bg-[#202030]">Cancel</Button>
+                                </DialogClose>
                                 <Button
                                   onClick={handleEditPromotion}
                                   disabled={isUpdatingPromotion}
@@ -2009,7 +2015,7 @@ export function PromotionManagement() {
   );
 }
 
-function PromotionForm({ formData, setFormData, categoryOptions, productOptions }: {
+export function PromotionForm({ formData, setFormData, categoryOptions, productOptions }: {
   formData: Partial<Promotion>;
   setFormData: (data: Partial<Promotion>) => void;
   categoryOptions: string[];
@@ -2104,118 +2110,170 @@ function PromotionForm({ formData, setFormData, categoryOptions, productOptions 
     syncTargetProducts(selectedCategories, nextProducts);
   };
 
+  // Quick promotion lengths: end = start + N days (start defaults to now).
+  const durationPresets = [
+    { label: '1 day', days: 1 },
+    { label: '3 days', days: 3 },
+    { label: '1 week', days: 7 },
+    { label: '2 weeks', days: 14 },
+    { label: '1 month', days: 30 },
+  ];
+  const applyDuration = (days: number) => {
+    const startValue = normalizePromotionDateTime(formData.start_date, 'start') || toLocalDateTimeInput();
+    const startMs = promotionTimeMs(startValue, 'start');
+    setFormData({ ...formData, start_date: startValue, end_date: toLocalDateTimeInput(new Date(startMs + days * 86400000)) });
+  };
+  const startMs = promotionTimeMs(formData.start_date, 'start');
+  const endMs = promotionTimeMs(formData.end_date, 'end');
+  const hasWindow = Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs;
+  const durationDays = hasWindow ? Math.max(1, Math.round((endMs - startMs) / 86400000)) : 0;
+  const formatWhen = (ms: number) =>
+    new Date(ms).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+  const typeOptions: Array<{ value: Promotion['discount_type']; title: string; hint: string; icon: typeof Percent }> = [
+    { value: 'Percentage', title: 'Percent off', hint: 'e.g. 15% off each pair', icon: Percent },
+    { value: 'Fixed Amount', title: 'Peso amount off', hint: 'e.g. ₱500 off each pair', icon: Coins },
+    { value: 'BOGO', title: 'Buy 1 Get 1', hint: 'Every 2nd pair is free', icon: Copy },
+    { value: 'Bundle', title: 'Bundle deal', hint: '% off when 2+ listed items are bought together', icon: ShoppingCart },
+  ];
+  const selectedType = (formData.discount_type || 'Percentage') as Promotion['discount_type'];
+  const discountValue = Number(formData.discount_value || 0);
+  const offerSummary = isBogoType
+    ? 'Buy 1 Get 1 (2nd pair free)'
+    : !discountValue
+      ? 'No discount value yet'
+      : isFixedAmountType
+        ? `₱${discountValue.toLocaleString()} off each item`
+        : isBundleType
+          ? `${discountValue >= 5 ? discountValue : 10}% off each bundled item`
+          : `${discountValue}% off`;
+  const scopeSummary = isAllProductsSelected || !targetProductsValue ? 'All products' : targetProductsValue;
+  // The switch keeps its own state: an empty "specific" target is normalised back
+  // to "All Products" by the clean-up effect above, so it cannot drive the toggle.
+  const [scopeMode, setScopeMode] = useState<'all' | 'specific'>(isAllProductsSelected || !targetProductsValue ? 'all' : 'specific');
+
+  const sectionTitle = (step: number, title: string, hint?: string) => (
+    <div className="mb-3 flex items-baseline gap-2">
+      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-yellow-400 text-[11px] font-bold text-black">{step}</span>
+      <p className="text-sm font-semibold text-white">{title}</p>
+      {hint ? <p className="text-xs text-zinc-500">{hint}</p> : null}
+    </div>
+  );
+  const fieldClass = 'bg-[#1D1D26] border-[#313342] text-white placeholder:text-zinc-500 focus-visible:ring-yellow-400/40';
+
   return (
-    <div className="grid gap-4 py-4">
-      <div className="space-y-2">
-        <Label htmlFor="promo_name" className="text-yellow-300">Promotion Name *</Label>
+    <div className="space-y-6 py-1">
+      {/* 1. Name */}
+      <section>
+        {sectionTitle(1, 'Promotion name')}
         <Input
           id="promo_name"
           value={formData.promo_name || ''}
           onChange={(e) => setFormData({ ...formData, promo_name: e.target.value })}
-          className="bg-[#1D1D26] border-[#313342] text-white placeholder:text-zinc-500 focus-visible:ring-yellow-400/40"
-          placeholder="e.g., Spring Sale 2026"
+          className={fieldClass}
+          placeholder="e.g., Ber Months Sale"
         />
-      </div>
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label htmlFor="discount_type" className="text-yellow-300">Promotion Type *</Label>
-          <Select
-            value={formData.discount_type || 'Percentage'}
-            onValueChange={(value) =>
-              setFormData({
-                ...formData,
-                discount_type: value as Promotion['discount_type'],
-                discount_value: String(value).toLowerCase().includes('bogo') ? 0 : formData.discount_value,
-              })
-            }
-          >
-            <SelectTrigger className="bg-[#1D1D26] border-[#313342] text-white">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="bg-[#181822] border-[#313342] text-white">
-              <SelectItem value="Percentage">Percentage Discount</SelectItem>
-              <SelectItem value="Fixed Amount">Fixed Amount Off</SelectItem>
-              <SelectItem value="BOGO">Buy One Get One</SelectItem>
-              <SelectItem value="Bundle">Bundle Deal</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="discount_value" className="text-yellow-300">
-            {isFixedAmountType ? 'Discount Value (PHP amount) *' : isBundleType ? 'Bundle Discount (% off each item) *' : isPercentageType ? 'Discount Value (%) *' : 'Discount Value *'}
-          </Label>
-          <Input
-            id="discount_value"
-            type="number"
-            value={formData.discount_value || ''}
-            onChange={(e) => setFormData({ ...formData, discount_value: parseFloat(e.target.value) })}
-            className="bg-[#1D1D26] border-[#313342] text-white placeholder:text-zinc-500 focus-visible:ring-yellow-400/40"
-            placeholder={
-              isBogoType
-                ? 'Auto for BOGO (default 50)'
-                : isFixedAmountType
-                  ? 'e.g. 500 for ₱500 off'
-                  : isPercentageType || isBundleType
-                    ? 'e.g. 15 for 15% off'
-                    : 'Enter discount'
-            }
-            disabled={isBogoType}
-          />
-          {isFixedAmountType ? (
-            <p className="text-xs text-yellow-300/80">Example: enter <span className="text-yellow-300">500</span> to deduct <span className="text-yellow-300">₱500</span> from each qualifying item.</p>
-          ) : isBundleType ? (
-            <p className="text-xs text-yellow-300/80">Percent off each bundled item. Values below 5 are applied as 10%.</p>
-          ) : null}
-        </div>
-      </div>
-      <div className="space-y-2">
-        <Label htmlFor="targetSalesGoal" className="text-yellow-300">Target Sales Goal (PHP) *</Label>
-        <Input
-          id="targetSalesGoal"
-          type="number"
-          value={formData.targetSalesGoal || ''}
-          onChange={(e) => setFormData({ ...formData, targetSalesGoal: e.target.value ? Number(e.target.value) : undefined })}
-          className="bg-[#1D1D26] border-[#313342] text-white placeholder:text-zinc-500 focus-visible:ring-yellow-400/40"
-          placeholder="e.g. 10000"
-        />
-        <p className="text-xs text-zinc-400">Promotion effectiveness is measured as sales generated during the promo period divided by this goal.</p>
-      </div>
-      <div className="space-y-2">
-        <Label htmlFor="targetProducts" className="text-yellow-300">Target Products *</Label>
-        <div className="space-y-3 rounded-lg border border-[#313342] bg-[#161622] p-3">
-          <Input
-            id="targetProducts"
-            value={formData.targetProducts || 'All Products'}
-            readOnly
-            onClick={() => {
-              if (isBogoType) return;
-              setSelectedCategories([]);
-              setSelectedProducts([]);
-              setFormData({
-                ...formData,
-                targetProducts: 'All Products',
-              });
-            }}
-            className="bg-[#1D1D26] border-[#313342] text-white cursor-pointer"
-          />
-          <p className="text-xs text-zinc-400">
-            Tip: Click <span className="text-yellow-300 font-semibold">All Products</span> button or click the field above to target all products.
-          </p>
-          {isBogoType ? (
-            <p className="text-xs text-amber-300/90">
-              BOGO supports product-level, category-level, or all-products scope. POS applies one winning promo per item.
-            </p>
-          ) : null}
+      </section>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      {/* 2. Offer */}
+      <section>
+        {sectionTitle(2, 'Offer', 'What the customer gets')}
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {typeOptions.map((option) => {
+            const active = selectedType === option.value;
+            const Icon = option.icon;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() =>
+                  setFormData({
+                    ...formData,
+                    discount_type: option.value,
+                    discount_value: option.value === 'BOGO' ? 0 : formData.discount_value,
+                  })
+                }
+                className={`rounded-xl border p-3 text-left transition ${
+                  active ? 'border-yellow-400 bg-yellow-400/10' : 'border-[#313342] bg-[#1A1A23] hover:border-yellow-400/50'
+                }`}
+                aria-pressed={active}
+              >
+                <Icon className={`mb-1.5 h-4 w-4 ${active ? 'text-yellow-300' : 'text-zinc-400'}`} />
+                <p className={`text-sm font-semibold ${active ? 'text-yellow-200' : 'text-white'}`}>{option.title}</p>
+                <p className="mt-0.5 text-[11px] leading-snug text-zinc-400">{option.hint}</p>
+              </button>
+            );
+          })}
+        </div>
+        {isBogoType ? (
+          <p className="mt-3 rounded-lg border border-[#313342] bg-[#1A1A23] px-3 py-2 text-xs text-zinc-300">
+            The customer pays for 1 of every 2 pairs of the same model — a 50% effective discount. No value needed.
+          </p>
+        ) : (
+          <div className="mt-3 max-w-xs space-y-1.5">
+            <Label htmlFor="discount_value" className="text-xs text-zinc-400">
+              {isFixedAmountType ? 'Amount off each item' : isBundleType ? 'Percent off each bundled item' : 'Percent off'}
+            </Label>
+            <div className="relative">
+              {isFixedAmountType ? <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-zinc-400">₱</span> : null}
+              <Input
+                id="discount_value"
+                type="number"
+                min={0}
+                max={isFixedAmountType ? undefined : 100}
+                value={formData.discount_value || ''}
+                onChange={(e) => setFormData({ ...formData, discount_value: parseFloat(e.target.value) })}
+                className={`${fieldClass} ${isFixedAmountType ? 'pl-7' : 'pr-8'}`}
+                placeholder={isFixedAmountType ? '500' : '15'}
+              />
+              {!isFixedAmountType ? <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-zinc-400">%</span> : null}
+            </div>
+            {isBundleType ? <p className="text-[11px] text-zinc-500">Values below 5 are applied as 10%.</p> : null}
+          </div>
+        )}
+      </section>
+
+      {/* 3. Products */}
+      <section>
+        {sectionTitle(3, 'Products', 'Which shoes it applies to')}
+        <div className="inline-flex rounded-lg border border-[#313342] bg-[#1A1A23] p-0.5">
+          {[
+            { id: 'all', label: 'All products' },
+            { id: 'specific', label: 'Specific categories / products' },
+          ].map((choice) => {
+            const active = scopeMode === choice.id;
+            return (
+              <button
+                key={choice.id}
+                type="button"
+                onClick={() => {
+                  setScopeMode(choice.id as 'all' | 'specific');
+                  if (choice.id === 'all') {
+                    setSelectedCategories([]);
+                    setSelectedProducts([]);
+                    setFormData({ ...formData, targetProducts: 'All Products' });
+                  }
+                }}
+                className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                  active ? 'bg-yellow-400 text-black' : 'text-zinc-300 hover:text-yellow-200'
+                }`}
+              >
+                {choice.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {scopeMode === 'specific' ? (
+          <div className="mt-3 grid grid-cols-1 gap-4 rounded-xl border border-[#313342] bg-[#161622] p-3 md:grid-cols-2">
             <div className="space-y-2">
-              <Label className="text-yellow-300 text-xs">Categories (choose one or more)</Label>
+              <Label className="text-xs text-zinc-400">Categories</Label>
               <Select value={pendingCategory} onValueChange={(value) => {
                 addCategory(value);
                 setPendingCategory('');
               }}>
                 <SelectTrigger className="bg-[#1D1D26] border-[#313342] text-white">
-                  <SelectValue placeholder="Select category" />
+                  <SelectValue placeholder="Add a category" />
                 </SelectTrigger>
                 <SelectContent className="bg-[#181822] border-[#313342] text-white">
                   {categoryOptions.map((category) => (
@@ -2223,48 +2281,28 @@ function PromotionForm({ formData, setFormData, categoryOptions, productOptions 
                   ))}
                 </SelectContent>
               </Select>
-              <div className="flex flex-wrap gap-2 min-h-6">
+              <div className="flex min-h-6 flex-wrap gap-1.5">
                 {selectedCategories.map((category) => (
-                  <Badge key={category} className="bg-yellow-400 text-black font-semibold gap-1 pr-1">
+                  <Badge key={category} className="gap-1 bg-yellow-400 pr-1 font-semibold text-black">
                     {category}
-                    <button type="button" className="ml-1" onClick={() => removeCategory(category)}>
-                      <X className="w-3 h-3" />
+                    <button type="button" className="ml-1" onClick={() => removeCategory(category)} aria-label={`Remove ${category}`}>
+                      <X className="h-3 w-3" />
                     </button>
                   </Badge>
                 ))}
               </div>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className={`border transition-all duration-200 ${
-                  isAllProductsSelected
-                    ? 'border-yellow-400 bg-yellow-400 text-black hover:bg-yellow-300 font-bold'
-                    : 'border-[#313342] bg-[#1D1D26] text-white hover:bg-[#252530]'
-                }`}
-              onClick={() => {
-                setSelectedCategories([]);
-                setSelectedProducts([]);
-                setFormData({
-                  ...formData,
-                  targetProducts: 'All Products',
-                  });
-                }}
-              >
-                {isAllProductsSelected ? <Check className="w-4 h-4 mr-1" /> : null}
-                {isAllProductsSelected ? 'All Products Selected' : 'All Products'}
-              </Button>
             </div>
 
             <div className="space-y-2">
-              <Label className="text-yellow-300 text-xs">Products (filtered by category)</Label>
+              <Label className="text-xs text-zinc-400">Products {selectedCategories.length ? '(within the chosen categories)' : ''}</Label>
               <Dialog open={isProductPickerOpen} onOpenChange={setIsProductPickerOpen}>
                 <DialogTrigger asChild>
-                  <Button type="button" className="w-full justify-start bg-[#1D1D26] border border-[#313342] text-white hover:bg-[#252530]">
-                    Select product
+                  <Button type="button" className="w-full justify-start border border-[#313342] bg-[#1D1D26] text-white hover:bg-[#252530]">
+                    <Plus className="mr-2 h-4 w-4 text-yellow-400" />
+                    Add a product
                   </Button>
                 </DialogTrigger>
-                <DialogContent className="bg-[#15161d] border-[#2a2c36] text-yellow-100 max-w-2xl max-h-[85vh] overflow-hidden p-0">
+                <DialogContent className="bg-[#15161d] border-[#2a2c36] text-yellow-100 sm:max-w-2xl max-h-[85vh] overflow-hidden p-0">
                   <DialogHeader className="border-b border-white/10 px-5 py-4">
                     <DialogTitle className="text-white">Select Sellable Products</DialogTitle>
                   </DialogHeader>
@@ -2309,55 +2347,115 @@ function PromotionForm({ formData, setFormData, categoryOptions, productOptions 
                   </div>
                 </DialogContent>
               </Dialog>
-              <div className="flex flex-wrap gap-2 min-h-6">
+              <div className="flex min-h-6 flex-wrap gap-1.5">
                 {selectedProducts.map((product) => (
-                  <Badge key={product} className="bg-[#2B2B38] text-yellow-300 border border-zinc-700 font-semibold gap-1 pr-1">
+                  <Badge key={product} className="gap-1 border border-zinc-700 bg-[#2B2B38] pr-1 font-semibold text-yellow-300">
                     {product}
-                    <button type="button" className="ml-1" onClick={() => removeProduct(product)}>
-                      <X className="w-3 h-3" />
+                    <button type="button" className="ml-1" onClick={() => removeProduct(product)} aria-label={`Remove ${product}`}>
+                      <X className="h-3 w-3" />
                     </button>
                   </Badge>
                 ))}
               </div>
             </div>
+            {!selectedCategories.length && !selectedProducts.length ? (
+              <p className="text-xs text-amber-300/90 md:col-span-2">Add at least one category or product, or switch back to All products.</p>
+            ) : null}
+          </div>
+        ) : null}
+      </section>
+
+      {/* 4. Schedule */}
+      <section>
+        {sectionTitle(4, 'Schedule', 'Starts and ends automatically')}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="start_date" className="text-xs text-zinc-400">Starts</Label>
+            <Input
+              id="start_date"
+              type="datetime-local"
+              style={{ colorScheme: 'dark' }}
+              min={minPromotionDate}
+              value={normalizePromotionDateTime(formData.start_date, 'start')}
+              onChange={(e) => {
+                const nextStartDate = e.target.value;
+                setFormData({
+                  ...formData,
+                  start_date: nextStartDate,
+                  end_date:
+                    formData.end_date && promotionTimeMs(formData.end_date, 'end') < promotionTimeMs(nextStartDate, 'start')
+                      ? nextStartDate
+                      : formData.end_date,
+                });
+              }}
+              className={fieldClass}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="end_date" className="text-xs text-zinc-400">Ends</Label>
+            <Input
+              id="end_date"
+              type="datetime-local"
+              style={{ colorScheme: 'dark' }}
+              min={normalizePromotionDateTime(formData.start_date, 'start') || minPromotionDate}
+              value={normalizePromotionDateTime(formData.end_date, 'end')}
+              onChange={(e) => setFormData({ ...formData, end_date: e.target.value })}
+              className={fieldClass}
+            />
           </div>
         </div>
-      </div>
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label htmlFor="start_date" className="text-yellow-300">Start Date & Time *</Label>
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <span className="text-xs text-zinc-500">Quick length:</span>
+          {durationPresets.map((preset) => (
+            <button
+              key={preset.days}
+              type="button"
+              onClick={() => applyDuration(preset.days)}
+              className={`rounded-full border px-2.5 py-0.5 text-xs transition ${
+                durationDays === preset.days
+                  ? 'border-yellow-400 bg-yellow-400/10 text-yellow-200'
+                  : 'border-[#313342] text-zinc-300 hover:border-yellow-400/50'
+              }`}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {/* 5. Goal */}
+      <section>
+        {sectionTitle(5, 'Target sales goal', 'Used to measure how well it performed')}
+        <div className="relative max-w-xs">
+          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-zinc-400">₱</span>
           <Input
-            id="start_date"
-            type="datetime-local"
-            min={minPromotionDate}
-            value={normalizePromotionDateTime(formData.start_date, 'start')}
-            onChange={(e) => {
-              const nextStartDate = e.target.value;
-              setFormData({
-                ...formData,
-                start_date: nextStartDate,
-                end_date:
-                  formData.end_date && promotionTimeMs(formData.end_date, 'end') < promotionTimeMs(nextStartDate, 'start')
-                    ? nextStartDate
-                    : formData.end_date,
-              });
-            }}
-            className="bg-[#1D1D26] border-[#313342] text-white focus-visible:ring-yellow-400/40"
+            id="targetSalesGoal"
+            type="number"
+            min={0}
+            value={formData.targetSalesGoal || ''}
+            onChange={(e) => setFormData({ ...formData, targetSalesGoal: e.target.value ? Number(e.target.value) : undefined })}
+            className={`${fieldClass} pl-7`}
+            placeholder="10000"
           />
         </div>
-        <div className="space-y-2">
-          <Label htmlFor="end_date" className="text-yellow-300">End Date & Time *</Label>
-          <Input
-            id="end_date"
-            type="datetime-local"
-            min={normalizePromotionDateTime(formData.start_date, 'start') || minPromotionDate}
-            value={normalizePromotionDateTime(formData.end_date, 'end')}
-            onChange={(e) => setFormData({ ...formData, end_date: e.target.value })}
-            className="bg-[#1D1D26] border-[#313342] text-white focus-visible:ring-yellow-400/40"
-          />
-        </div>
+      </section>
+
+      {/* Summary */}
+      <div className="rounded-xl border border-yellow-400/40 bg-yellow-400/[0.06] p-4">
+        <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-yellow-300">Summary</p>
+        <dl className="grid grid-cols-[90px_1fr] gap-y-1 text-sm">
+          <dt className="text-zinc-400">Offer</dt>
+          <dd className="font-medium text-white">{offerSummary}</dd>
+          <dt className="text-zinc-400">Applies to</dt>
+          <dd className="break-words font-medium text-white">{scopeSummary || '—'}</dd>
+          <dt className="text-zinc-400">Runs</dt>
+          <dd className="font-medium text-white">
+            {hasWindow ? `${formatWhen(startMs)} – ${formatWhen(endMs)} (${durationDays} day${durationDays === 1 ? '' : 's'})` : 'Choose start and end'}
+          </dd>
+          <dt className="text-zinc-400">Goal</dt>
+          <dd className="font-medium text-white">{formData.targetSalesGoal ? `₱${Number(formData.targetSalesGoal).toLocaleString()}` : '—'}</dd>
+        </dl>
       </div>
     </div>
   );
 }
-
