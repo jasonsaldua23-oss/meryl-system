@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Badge } from "./ui/badge";
@@ -178,6 +178,9 @@ const PROMO_TYPE_MARKERS = {
 } as const;
 
 const BOGO_MAX_PAIRS_PER_TRANSACTION = 4;
+/** Manual discounts above this percent need a manager override (manuscript TC-WSec004/005). */
+const MANUAL_DISCOUNT_LIMIT = 20;
+const LEGACY_APPROVAL = "approved-without-token";
 
 function parsePromotionTarget(rawValue: string | null | undefined) {
   const raw = String(rawValue ?? "").trim();
@@ -958,6 +961,9 @@ export function PointOfSale() {
     setManagerOverrideOpen(true);
   };
 
+  // One-time manager override token for manual discounts above 20% (TC-WSec004-006).
+  const discountOverrideRef = useRef<string | null>(null);
+
   const handleManagerAuthorize = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!managerUsername.trim() || !managerPassword.trim()) {
@@ -967,31 +973,39 @@ export function PointOfSale() {
 
     setManagerVerifying(true);
     try {
-      // Verify against the database without replacing the cashier's session.
-      const verifiedUser = await validateCredentials(managerUsername.trim(), managerPassword.trim(), {
-        issueSession: false,
+      // The database verifies the manager, issues a one-time override token for this
+      // cashier and writes the audit entry.
+      const { data: override, error: overrideError } = await (supabase as any).rpc("authorize_discount_override", {
+        p_username: managerUsername.trim(),
+        p_password: managerPassword.trim(),
       });
-
-      if (!verifiedUser || getRoleGroup(verifiedUser.role_name) !== "admin") {
-        toast.error("Authorization failed. Administrator or Manager credentials required.");
+      let managerName = String(override?.manager_name ?? "");
+      if (overrideError?.code === "PGRST202") {
+        // Database not yet migrated: fall back to a credential check.
+        const verifiedUser = await validateCredentials(managerUsername.trim(), managerPassword.trim(), { issueSession: false });
+        if (!verifiedUser || getRoleGroup(verifiedUser.role_name) !== "admin") {
+          toast.error("Authorization failed. Administrator or Manager credentials required.");
+          setManagerVerifying(false);
+          return;
+        }
+        managerName = verifiedUser.name;
+        discountOverrideRef.current = LEGACY_APPROVAL;
+        logAuditEvent({
+          action_type: "POS_MANAGER_OVERRIDE",
+          entity_type: "POS",
+          metadata: { action: pendingAction?.description, cashier: user?.username || "Cashier", manager: verifiedUser.username },
+        });
+      } else if (overrideError || !override?.override_id) {
+        toast.error(overrideError?.message || "Authorization failed. Administrator or Manager credentials required.");
         setManagerVerifying(false);
         return;
+      } else {
+        discountOverrideRef.current = String(override.override_id);
       }
-
-      // Log override event in audit trail
-      logAuditEvent({
-        action_type: "POS_MANAGER_OVERRIDE",
-        entity_type: "POS",
-        metadata: {
-          action: pendingAction?.description,
-          cashier: user?.username || "Cashier",
-          manager: verifiedUser.username,
-        },
-      });
 
       // Execute approved action
       pendingAction?.action();
-      toast.success(`Action authorized by ${verifiedUser.name}.`);
+      toast.success(`Action authorized by ${managerName || "manager"}.`);
       setManagerOverrideOpen(false);
       setPendingAction(null);
     } catch (err: any) {
@@ -1077,6 +1091,8 @@ export function PointOfSale() {
               ...item,
               discount: isBogoCartItem(item) ? getLineEffectiveDiscountPercent(item) : cleanDiscount,
               discountInput: isBogoCartItem(item) ? formatPercentValue(getLineEffectiveDiscountPercent(item)) : String(cleanDiscount),
+              // A hand-edited discount is a manual discount, not the promotion's.
+              promo_id: isBogoCartItem(item) ? item.promo_id : null,
             }
           : item,
       ),
@@ -1088,9 +1104,9 @@ export function PointOfSale() {
     setCart((prev) =>
       prev.map((item) => {
         if (item.id !== id || isBogoCartItem(item)) return item;
-        if (cleanValue === "") return { ...item, discountInput: "", discount: 0 };
+        if (cleanValue === "") return { ...item, discountInput: "", discount: 0, promo_id: null };
         const cleanDiscount = Math.min(100, Math.max(0, Number(cleanValue) || 0));
-        return { ...item, discountInput: cleanValue, discount: cleanDiscount };
+        return { ...item, discountInput: cleanValue, discount: cleanDiscount, promo_id: null };
       }),
     );
   };
@@ -1188,6 +1204,16 @@ export function PointOfSale() {
       }
     }
 
+    // Manuscript TC-WSec004/005: manual discounts above 20% need a manager override;
+    // an administrator at the POS is not prompted (TC-WSec003).
+    const needsOverride = cart.some((item) => !item.promo_id && Number(item.discount || 0) > MANUAL_DISCOUNT_LIMIT);
+    if (needsOverride && getRoleGroup(user?.role_name) !== "admin" && !discountOverrideRef.current) {
+      requestManagerApproval(`Apply a manual discount above ${MANUAL_DISCOUNT_LIMIT}%`, () => {
+        void processPayment();
+      });
+      return;
+    }
+
     const dbPaymentMethod = paymentMethod === "Cash" ? "cash" : "gcash";
 
     const selectedCustomer = customerOptions.find((c) => c.value === customerName);
@@ -1220,6 +1246,8 @@ export function PointOfSale() {
       price: item.price,
       discount_applied: Number(getLineEffectiveDiscountPercent(item).toFixed(2)),
       subtotal: Number(getLineTotal(item).toFixed(2)),
+      // The server checks promo discounts against the live promotion and stores promo_id.
+      promo_id: item.promo_id && getLineEffectiveDiscountPercent(item) > 0 ? item.promo_id : null,
     }));
 
     // The database records the signed-in cashier from the session; p_user_id is informational.
@@ -1233,16 +1261,21 @@ export function PointOfSale() {
     if (paymentMethod === "GCash") {
       saleArgs.p_reference_number = gcashRefNumber.replace(/\D/g, "");
     }
+    if (discountOverrideRef.current && discountOverrideRef.current !== LEGACY_APPROVAL) {
+      saleArgs.p_override_id = discountOverrideRef.current;
+    }
 
     const rpc = (supabase as any).rpc.bind(supabase);
     let { data, error } = await rpc("complete_sale", saleArgs);
-    if (error?.code === "PGRST202" && "p_reference_number" in saleArgs) {
-      // Database not yet migrated to the version that stores GCash references.
-      const { p_reference_number: _ignored, ...legacyArgs } = saleArgs;
-      ({ data, error } = await rpc("complete_sale", legacyArgs));
+    // Older database versions lack the newest parameters; retry without them.
+    for (const optional of ["p_override_id", "p_reference_number"]) {
+      if (error?.code !== "PGRST202" || !(optional in saleArgs)) continue;
+      delete saleArgs[optional];
+      ({ data, error } = await rpc("complete_sale", saleArgs));
     }
 
     if (error) return toast.error(error.message);
+    discountOverrideRef.current = null;
 
     const completedSalesId = String(data?.sales_id ?? "").trim();
     if (completedSalesId) {

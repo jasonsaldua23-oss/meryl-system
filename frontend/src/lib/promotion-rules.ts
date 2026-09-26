@@ -55,3 +55,78 @@ export function promotionTargetMatches(
   if (target.categories.length > 0) return target.categories.includes(categoryLower);
   return target.appliesToAll;
 }
+
+export type PromotionTarget = { appliesToAll: boolean; categories: string[]; products: string[] };
+
+/** Parses "Categories: A, B | Products: X, Y" / "All Products" (lower-cased). */
+export function parsePromotionTarget(rawValue: unknown): PromotionTarget {
+  const raw = String(rawValue ?? "").trim();
+  const categories: string[] = [];
+  const products: string[] = [];
+  if (raw && raw.toLowerCase() !== "all products") {
+    raw.split("|").forEach((segment) => {
+      const value = segment.trim();
+      const lower = value.toLowerCase();
+      const list = (text: string) => text.split(",").map((v) => v.trim().toLowerCase()).filter(Boolean);
+      if (lower.startsWith("categories:")) categories.push(...list(value.slice("categories:".length)));
+      else if (lower.startsWith("products:")) products.push(...list(value.slice("products:".length)));
+      else if (lower.endsWith(" category")) categories.push(lower.slice(0, -" category".length).trim());
+      else if (value) products.push(lower);
+    });
+  }
+  return { appliesToAll: !categories.length && !products.length, categories, products };
+}
+
+/** A promotion row's target: its target_products text, else its linked products, else everything. */
+export function promotionTargetFromRow(row: any): PromotionTarget {
+  if (String(row?.target_products ?? "").trim()) return parsePromotionTarget(row.target_products);
+  const links = Array.isArray(row?.promo_product) ? row.promo_product : [];
+  const names = links
+    .map((link: any) => (Array.isArray(link?.product) ? link.product[0] : link?.product)?.product_name)
+    .filter(Boolean)
+    .map((name: string) => String(name).trim().toLowerCase());
+  return names.length ? { appliesToAll: false, categories: [], products: names } : { appliesToAll: true, categories: [], products: [] };
+}
+
+const TYPE_MARKERS = ["__TYPE_BUNDLE__", "__TYPE_BOGO__"];
+
+export function promotionDisplayName(row: any) {
+  return TYPE_MARKERS.reduce((name, marker) => name.replace(marker, ""), String(row?.promo_name ?? "Promotion")).trim();
+}
+
+export function promotionKind(row: any): "percentage" | "fixed" | "bogo" | "bundle" {
+  const name = String(row?.promo_name ?? "");
+  if (name.includes("__TYPE_BOGO__")) return "bogo";
+  if (name.includes("__TYPE_BUNDLE__")) return "bundle";
+  const type = String(row?.discount_type ?? "").toLowerCase();
+  if (type.includes("bogo")) return "bogo";
+  if (type.includes("bundle")) return "bundle";
+  return type.includes("fixed") ? "fixed" : "percentage";
+}
+
+/**
+ * Which promotion a sale line belongs to. Lines record their promo_id when the
+ * POS applied one; older discounted lines without it are matched to the
+ * promotion that was running for that product at the time (most specific wins).
+ */
+export function attributeSaleLine(
+  line: { promoId?: string | null; discountPercent: number; productNameLower: string; categoryLower: string; saleMs: number },
+  promotions: any[],
+): string | null {
+  if (line.promoId) return line.promoId;
+  if (!(line.discountPercent > 0)) return null;
+  let best: { id: string; score: number; value: number } | null = null;
+  promotions.forEach((row) => {
+    const start = promotionBoundaryMs(row.start_date, "start");
+    const end = promotionBoundaryMs(row.end_date, "end");
+    if (line.saleMs < start || line.saleMs > end) return;
+    const target = promotionTargetFromRow(row);
+    if (!promotionTargetMatches(target, line.productNameLower, line.categoryLower)) return;
+    const score = target.products.length ? 3 : target.categories.length ? 2 : 1;
+    const value = Number(row.discount_value ?? 0);
+    if (!best || score > best.score || (score === best.score && value > best.value)) {
+      best = { id: String(row.promo_id), score, value };
+    }
+  });
+  return best ? (best as { id: string }).id : null;
+}

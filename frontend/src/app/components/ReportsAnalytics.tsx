@@ -7,7 +7,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { BarChart3, TrendingUp, Coins, Package, Calendar, Download, FileText, Trophy, Medal, Sparkles, Layers, Tag, UserCheck, CreditCard, Grid, FileSpreadsheet, Search, ShoppingBag, ArrowUpRight, ChevronLeft, ChevronRight, X, Filter } from 'lucide-react';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, ReferenceLine, ReferenceDot } from 'recharts';
 import { toast } from 'sonner';
-import { useProducts, useSales } from '../../lib/hooks';
+import { useProducts, usePromotions, useSales } from '../../lib/hooks';
+import { attributeSaleLine, promotionBoundaryMs, promotionDisplayName, promotionKind } from '../../lib/promotion-rules';
 import { shortId } from './ui/utils';
 import { localDateKey as localDayKey, parseDbTimestamp } from '../../lib/datetime';
 import { useAuth } from '../../lib/auth-context';
@@ -667,6 +668,7 @@ export function ReportsAnalytics() {
   const { user } = useAuth();
   const salesQuery = useSales();
   const productsQuery = useProducts();
+  const promotionsQuery = usePromotions();
 
   const salesRows = ((salesQuery.data as any[]) ?? []).filter(isCompletedSale);
   const productRows = (productsQuery.data as any[]) ?? [];
@@ -1871,6 +1873,104 @@ export function ReportsAnalytics() {
   }, [currentMetrics, customEndDate, customStartDate, productLookup, salesRows, timeRange, user?.name, user?.username]);
 
   /**
+   * Promotional performance report (manuscript Use Case 10 goal; Figure 10
+   * "evaluating promotion performance"; Table 29 target_sales_goal).
+   * Sales in the selected period per promotion, plus progress of the whole
+   * campaign toward its target sales goal.
+   */
+  const promotionReport = useMemo(() => {
+    const promos = ((promotionsQuery.data as any[]) ?? []).filter((row) => row?.promo_id);
+    const { now, start } = rangeWindow(timeRange, customStartDate, customEndDate);
+    type Stat = { sales: Set<string>; pairs: number; net: number; gross: number; discount: number; campaignNet: number };
+    const stats = new Map<string, Stat>();
+    const statFor = (id: string) => {
+      const existing = stats.get(id);
+      if (existing) return existing;
+      const created: Stat = { sales: new Set(), pairs: 0, net: 0, gross: 0, discount: 0, campaignNet: 0 };
+      stats.set(id, created);
+      return created;
+    };
+
+    salesRows.forEach((sale) => {
+      const date = saleDate(sale);
+      if (!date) return;
+      const inRange = date >= start && date <= now;
+      const details = Array.isArray(sale.sales_details) ? sale.sales_details : [];
+      details.forEach((detail: any) => {
+        const product = productLookup.get(String(detail.product_id ?? '')) ?? detail.product;
+        const qty = Number(detail.quantity ?? 0);
+        const gross = Number(detail.price ?? 0) * qty;
+        const net = Number(detail.subtotal ?? gross);
+        const discountPercent = Number(detail.discount_applied ?? 0) || (gross > 0 ? ((gross - net) / gross) * 100 : 0);
+        const promoId = attributeSaleLine(
+          {
+            promoId: detail.promo_id ? String(detail.promo_id) : null,
+            discountPercent,
+            productNameLower: String(product?.product_name ?? '').trim().toLowerCase(),
+            categoryLower: String(product?.category?.[0]?.category_name ?? product?.category?.category_name ?? '').trim().toLowerCase(),
+            saleMs: date.getTime(),
+          },
+          promos,
+        );
+        if (!promoId) return;
+        const stat = statFor(promoId);
+        stat.campaignNet += net;
+        if (!inRange) return;
+        stat.sales.add(String(sale.sales_id ?? ''));
+        stat.pairs += qty;
+        stat.net += net;
+        stat.gross += gross;
+        stat.discount += Math.max(0, gross - net);
+      });
+    });
+
+    const nowMs = Date.now();
+    const dateLabel = (ms: number) =>
+      Number.isFinite(ms) ? new Date(ms).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+    const rows = promos
+      .map((row) => {
+        const startMs = promotionBoundaryMs(row.start_date, 'start');
+        const endMs = promotionBoundaryMs(row.end_date, 'end');
+        const stat = stats.get(String(row.promo_id));
+        const overlaps = startMs <= now.getTime() && endMs >= start.getTime();
+        if (!overlaps && !stat?.sales.size) return null;
+        const kind = promotionKind(row);
+        const value = Number(row.discount_value ?? 0);
+        const rawStatus = String(row.status ?? '').toLowerCase();
+        const status = rawStatus === 'inactive' || rawStatus === 'deactivated'
+          ? 'Paused'
+          : endMs < nowMs ? 'Ended' : startMs > nowMs ? 'Upcoming' : 'Active';
+        const goal = Number(row.target_sales_goal ?? 0);
+        const campaignNet = stat?.campaignNet ?? 0;
+        return {
+          id: String(row.promo_id),
+          name: promotionDisplayName(row),
+          offer: kind === 'percentage' ? `${value}% off` : kind === 'fixed' ? `PHP ${value.toLocaleString()} off` : kind === 'bogo' ? 'Buy 1 Get 1' : `Bundle ${value >= 5 ? value : 10}%`,
+          window: `${dateLabel(startMs)} – ${dateLabel(endMs)}`,
+          status,
+          transactions: stat?.sales.size ?? 0,
+          pairs: stat?.pairs ?? 0,
+          net: stat?.net ?? 0,
+          discount: stat?.discount ?? 0,
+          goal,
+          campaignNet,
+          progress: goal > 0 ? (campaignNet / goal) * 100 : 0,
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => Boolean(row))
+      .sort((a, b) => b.net - a.net || a.name.localeCompare(b.name));
+
+    return {
+      rows,
+      totalNet: rows.reduce((sum, row) => sum + row.net, 0),
+      totalDiscount: rows.reduce((sum, row) => sum + row.discount, 0),
+      totalPairs: rows.reduce((sum, row) => sum + row.pairs, 0),
+      metGoal: rows.filter((row) => row.goal > 0 && row.progress >= 100).length,
+      withGoal: rows.filter((row) => row.goal > 0).length,
+    };
+  }, [customEndDate, customStartDate, productLookup, promotionsQuery.data, salesRows, timeRange]);
+
+  /**
    * Suggested actions for the selected period, derived from sales and stock:
    * what to restock, what is not moving, and where revenue is going.
    */
@@ -2038,6 +2138,7 @@ export function ReportsAnalytics() {
       sizes: `Size Distribution Report - ${sizeFilter === 'all' ? 'All Sizes' : sizeFilter}`,
       variants: `Variant Color Report - ${variantFilter === 'all' ? 'All Colors' : variantFilter}`,
       payments: 'Payment Method Report',
+      promotions: 'Promotion Performance Report',
       revenue: 'Revenue by Category Report',
       inventory: 'Inventory & Stock Report',
     };
@@ -2304,6 +2405,19 @@ export function ReportsAnalytics() {
     } else if (reportType === 'payments') {
       drawTitle('Payment Method Performance');
       drawTable(['Rank', 'Payment Method', 'Transactions', 'Total Collected', 'Txn Share', 'Revenue Share'], paymentDetailReport.allPaymentsList.map((p) => [`#${p.rank}`, p.name, String(p.count), money(p.revenue), `${p.txnShare}%`, `${p.share}%`]), [40, 150, 80, 95, 75, 75]);
+    } else if (reportType === 'promotions') {
+      drawTitle('Promotion Performance');
+      drawTable(['Summary', 'Value'], [
+        ['Promotions in period', String(promotionReport.rows.length)],
+        ['Sales from promotions', money(promotionReport.totalNet)],
+        ['Discounts given', money(promotionReport.totalDiscount)],
+        ['Met sales goal', `${promotionReport.metGoal} of ${promotionReport.withGoal}`],
+      ], [250, 265]);
+      drawTable(
+        ['Promotion', 'Status', 'Txns', 'Pairs', 'Net Sales', 'Discount', 'Goal'],
+        promotionReport.rows.map((row) => [row.name, row.status, String(row.transactions), String(row.pairs), money(row.net), money(row.discount), row.goal > 0 ? `${row.progress.toFixed(0)}%` : '-']),
+        [140, 55, 40, 40, 85, 80, 75],
+      );
     } else if (reportType === 'revenue') {
       drawTitle('Revenue by Category');
       drawTable(['Category', 'Revenue', 'Share', 'Growth'], revenueByCategory.map((row) => [row.category, money(row.revenue), `${row.percentage}%`, `${row.growth}%`]));
@@ -2422,6 +2536,7 @@ export function ReportsAnalytics() {
         sizes: `Size Distribution Report - ${sizeFilter === 'all' ? 'All Sizes' : sizeFilter}`,
         variants: `Variant Color Report - ${variantFilter === 'all' ? 'All Colors' : variantFilter}`,
         payments: 'Payment Method Report',
+        promotions: 'Promotion Performance Report',
         revenue: 'Revenue by Category Report',
         inventory: 'Inventory & Stock Report',
       };
@@ -2713,6 +2828,15 @@ export function ReportsAnalytics() {
         lines.push('');
       }
 
+      if (reportType === 'promotions') {
+        lines.push(formatRow(['=== PROMOTION PERFORMANCE ===']));
+        lines.push(formatRow(['Promotion', 'Offer', 'Window', 'Status', 'Transactions', 'Pairs', 'Net Sales (PHP)', 'Discount Given (PHP)', 'Target Sales Goal (PHP)', 'Campaign Sales (PHP)', 'Goal Progress (%)']));
+        promotionReport.rows.forEach((row) => {
+          lines.push(formatRow([row.name, row.offer, row.window, row.status, row.transactions, row.pairs, row.net.toFixed(2), row.discount.toFixed(2), row.goal.toFixed(2), row.campaignNet.toFixed(2), row.goal > 0 ? row.progress.toFixed(1) : '']));
+        });
+        lines.push('');
+      }
+
       if (reportType === 'revenue') {
         lines.push(formatRow(['=== REVENUE BY PRODUCT CATEGORY ===']));
         lines.push(formatRow(['Category', 'Gross Revenue (PHP)', 'Revenue Share (%)', 'Growth (%)']));
@@ -2855,6 +2979,7 @@ export function ReportsAnalytics() {
                 <SelectItem value="rankings">Top 5 Product Rankings</SelectItem>
                 <SelectItem value="specific_category_all">Specific & Category Reports (All-in-One)</SelectItem>
                 <SelectItem value="revenue">Revenue by Category Report</SelectItem>
+                <SelectItem value="promotions">Promotion Performance Report</SelectItem>
                 <SelectItem value="inventory">Inventory & Stock Report</SelectItem>
               </SelectContent>
             </Select>
@@ -4607,6 +4732,88 @@ export function ReportsAnalytics() {
             </CardContent>
           </Card>
           )}
+        </div>
+      )}
+
+      {reportType === 'promotions' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            {[
+              { label: 'Promotions in period', value: String(promotionReport.rows.length) },
+              { label: 'Sales from promotions', value: money(promotionReport.totalNet) },
+              { label: 'Discounts given', value: money(promotionReport.totalDiscount) },
+              { label: 'Met sales goal', value: `${promotionReport.metGoal} of ${promotionReport.withGoal}` },
+            ].map((stat) => (
+              <Card key={stat.label} className="bg-[#0b0b0f] border-[#24242d]">
+                <CardContent className="pt-5">
+                  <p className="text-xs uppercase tracking-wide text-white/50">{stat.label}</p>
+                  <p className="mt-1 text-xl font-semibold text-white">{stat.value}</p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+          <Card className="bg-[#0b0b0f] border-[#24242d]">
+            <CardHeader>
+              <CardTitle className="text-yellow-300 flex items-center gap-2">
+                <Tag className="w-5 h-5" />
+                Promotion Performance
+              </CardTitle>
+              <p className="mt-1 text-sm text-white/55">
+                Sales and discounts in {selectedRangeLabel}. Goal progress counts every sale during the whole campaign.
+              </p>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                <Table className="rounded-lg border border-[#24242d] bg-[#07070a]">
+                  <TableHeader className="bg-[#0b0b0f]">
+                    <TableRow className="border-[#24242d] hover:bg-[#0b0b0f]">
+                      <TableHead className="text-yellow-300">Promotion</TableHead>
+                      <TableHead className="text-yellow-300">Status</TableHead>
+                      <TableHead className="text-yellow-300 text-center">Transactions</TableHead>
+                      <TableHead className="text-yellow-300 text-center">Pairs</TableHead>
+                      <TableHead className="text-yellow-300 text-right">Net Sales</TableHead>
+                      <TableHead className="text-yellow-300 text-right">Discount Given</TableHead>
+                      <TableHead className="text-yellow-300 min-w-[180px]">Goal Progress</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {promotionReport.rows.map((row) => (
+                      <TableRow key={row.id} className="border-[#24242d] bg-[#07070a] hover:bg-white/[0.03]">
+                        <TableCell>
+                          <p className="font-medium text-white">{row.name}</p>
+                          <p className="text-xs text-white/50">{row.offer} · {row.window}</p>
+                        </TableCell>
+                        <TableCell className="text-white/80">{row.status}</TableCell>
+                        <TableCell className="text-center text-white/80">{row.transactions}</TableCell>
+                        <TableCell className="text-center text-white/80">{row.pairs}</TableCell>
+                        <TableCell className="text-right text-yellow-200">{money(row.net)}</TableCell>
+                        <TableCell className="text-right text-white/80">{money(row.discount)}</TableCell>
+                        <TableCell>
+                          {row.goal > 0 ? (
+                            <div>
+                              <div className="h-1.5 overflow-hidden rounded-full bg-[#24242d]">
+                                <div className="h-full rounded-full bg-yellow-400" style={{ width: `${Math.min(100, row.progress)}%` }} />
+                              </div>
+                              <p className="mt-1 text-xs text-white/60">
+                                {row.progress.toFixed(0)}% · {money(row.campaignNet)} of {money(row.goal)}
+                              </p>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-white/40">No goal set</span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {!promotionReport.rows.length && (
+                      <TableRow className="border-[#24242d] bg-[#07070a]">
+                        <TableCell colSpan={7} className="py-6 text-center text-white/60">No promotions ran in this period.</TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
         </div>
       )}
 

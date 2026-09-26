@@ -15,6 +15,8 @@ import { useCustomers, useProducts, usePromotions, usePromotionsMutations, useSa
 import { BACKEND_BASE, getBackendAuthHeaders, useAuth } from '../../lib/auth-context';
 import { writeAuditLog } from '../../lib/audit';
 import { supabase } from '../../lib/supabase';
+import { buildAudience } from '../../lib/promotion-audience';
+import { PromotionNotifyDialog } from './PromotionNotifyDialog';
 
 type Promotion = {
   promo_id: string;
@@ -528,6 +530,9 @@ export function PromotionManagement() {
   const [lastNotificationBatch, setLastNotificationBatch] = useState<Notification[]>([]);
   const [lastNotificationPromo, setLastNotificationPromo] = useState<Partial<Promotion>>({});
   const [isSavingPromotion, setIsSavingPromotion] = useState(false);
+  // Promotion whose email audience is being chosen (Use Case 9); null = dialog closed.
+  const [notifyTarget, setNotifyTarget] = useState<{ promo_id: string; promo_name: string; start_date?: string; end_date?: string } | null>(null);
+  const [isSendingNotify, setIsSendingNotify] = useState(false);
   const [isUpdatingPromotion, setIsUpdatingPromotion] = useState(false);
 
   const syncPromotionProductLinks = async (promoId: string, targetProducts: string | undefined) => {
@@ -573,13 +578,19 @@ export function PromotionManagement() {
     }
   }, []);
 
-  const triggerPromotionEmailNotification = async (promoId: string) => {
+  const emailAudience = useMemo(
+    () => buildAudience((customersQuery.data as any[]) ?? [], (salesQuery.data as any[]) ?? []),
+    [customersQuery.data, salesQuery.data],
+  );
+
+  const triggerPromotionEmailNotification = async (promoId: string, customerIds?: string[]) => {
     const parseResult = async (response: Response) => response.json().catch(() => ({}));
     // The backend verifies the staff session from these headers.
     const response = await fetch(`${BACKEND_BASE}/api/promotions/${encodeURIComponent(promoId)}/notify`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...(await getBackendAuthHeaders()) },
       credentials: 'include',
+      body: JSON.stringify(customerIds ? { customer_ids: customerIds } : {}),
     });
     const result = await parseResult(response);
 
@@ -725,9 +736,11 @@ export function PromotionManagement() {
     last30.setDate(now.getDate() - 30);
 
     const soldByProduct = new Map<string, number>();
+    // Last completed sale per product, for holding duration (Use Case 8 Scenario 3).
+    const lastSoldByProduct = new Map<string, number>();
     sales.forEach((sale: any) => {
-      const txDate = new Date(sale.transaction_date ?? sale.created_at ?? '');
-      if (Number.isNaN(txDate.getTime()) || txDate < last30) return;
+      const txTime = saleTimestampMs(sale.transaction_date ?? sale.created_at);
+      if (Number.isNaN(txTime)) return;
       const payment = Array.isArray(sale.payment) ? sale.payment[0] : sale.payment;
       const status = String(payment?.payment_status ?? '').toLowerCase();
       if (status !== 'completed' && status !== 'paid') return;
@@ -735,6 +748,8 @@ export function PromotionManagement() {
       details.forEach((d: any) => {
         const pid = String(d.product_id ?? '');
         if (!pid) return;
+        lastSoldByProduct.set(pid, Math.max(lastSoldByProduct.get(pid) ?? 0, txTime));
+        if (txTime < last30.getTime()) return;
         soldByProduct.set(pid, (soldByProduct.get(pid) ?? 0) + Number(d.quantity ?? 0));
       });
     });
@@ -747,8 +762,11 @@ export function PromotionManagement() {
       const velocity = sold30 / 30;
       const srp = Number(inventory?.srp ?? p.srp ?? p.selling_price ?? p.price ?? 0);
       const unitCost = Number(p.cost_price ?? p.unit_price ?? p.base_price ?? 0);
+      const listedAt = saleTimestampMs(p.created_at);
+      const lastMovement = lastSoldByProduct.get(String(p.product_id ?? '')) ?? (Number.isNaN(listedAt) ? now.getTime() : listedAt);
       return {
         id: String(p.product_id ?? ''),
+        holdingDays: Math.max(0, Math.floor((now.getTime() - lastMovement) / 86400000)),
         name: String(p.product_name ?? 'Unknown Product'),
         category: String(p.category?.[0]?.category_name ?? p.category?.category_name ?? 'General'),
         srp,
@@ -761,12 +779,31 @@ export function PromotionManagement() {
       };
     });
 
-    const slow = rows
-      .filter((r) => r.stock >= r.reorder * 2 && r.sold30 > 0 && r.sold30 <= 5)
-      .sort((a, b) => a.sold30 - b.sold30)[0];
-    const overstock = rows
-      .filter((r) => r.stock >= r.reorder * 3 && r.sold30 <= 2)
-      .sort((a, b) => b.stock - a.stock)[0];
+    // Promotions target models by name, so combine every size/colour of a model.
+    const models = new Map<string, { name: string; category: string; stock: number; sold30: number; holdingDays: number; variants: typeof rows }>();
+    rows.forEach((r) => {
+      const key = r.name.trim().toLowerCase();
+      const model = models.get(key) ?? { name: r.name, category: r.category, stock: 0, sold30: 0, holdingDays: Number.POSITIVE_INFINITY, variants: [] as typeof rows };
+      model.stock += r.stock;
+      model.sold30 += r.sold30;
+      // The model is only as idle as its most recently sold variant.
+      model.holdingDays = Math.min(model.holdingDays, r.holdingDays);
+      model.variants.push(r);
+      models.set(key, model);
+    });
+    const modelList = Array.from(models.values()).filter((m) => m.stock > 0);
+    const safeFor = (model: { variants: typeof rows }, requested: number) => {
+      const priced = model.variants.filter((v) => v.srp > 0 && v.unitCost > 0);
+      return priced.length ? Math.min(...priced.map((v) => roundedSafePercentage(v, requested))) : Math.min(5, requested);
+    };
+    // Slow / dead stock by holding duration (manuscript: dead stock = no sale in 60+ days).
+    const idle = modelList
+      .filter((m) => m.holdingDays >= 30)
+      .sort((a, b) => b.holdingDays - a.holdingDays || b.stock - a.stock);
+    const slow = idle[0];
+    const fast = modelList
+      .filter((m) => m.sold30 > 0 && (!slow || m.name !== slow.name))
+      .sort((a, b) => b.sold30 - a.sold30)[0];
     const categoryRollup = new Map<string, { stock: number; sold: number }>();
     rows.forEach((r) => {
       const prev = categoryRollup.get(r.category) ?? { stock: 0, sold: 0 };
@@ -778,23 +815,25 @@ export function PromotionManagement() {
 
     const recs: PromotionRecommendation[] = [];
     if (slow) {
+      const isDead = slow.holdingDays >= 60;
       recs.push({
-        id: `slow-${slow.id}`,
-        title: `Boost slow mover: ${slow.name}`,
-        rationale: `${slow.sold30} sold in 30d with ${slow.stock} units on hand.`,
+        id: `clearance-${slow.name}`,
+        title: `${isDead ? 'Clear dead stock' : 'Boost slow mover'}: ${slow.name}`,
+        rationale: `No sale in ${slow.holdingDays} days with ${slow.stock} pairs on hand${isDead ? ' (dead stock: 60+ days).' : '.'}`,
         discount_type: 'Percentage',
-        discount_value: roundedSafePercentage(slow, 15),
-        targetProducts: slow.name,
+        discount_value: safeFor(slow, isDead ? 20 : 15),
+        targetProducts: `Products: ${slow.name}`,
       });
     }
-    if (overstock) {
+    if (slow && fast) {
+      // Targeted Sales Marketing: pair a slow-moving model with a fast-moving one.
       recs.push({
-        id: `overstock-${overstock.id}`,
-        title: `Clear overstock: ${overstock.name}`,
-        rationale: `${overstock.stock} units in stock and very low movement.`,
+        id: `bundle-${slow.name}-${fast.name}`,
+        title: `Bundle: ${slow.name} + ${fast.name}`,
+        rationale: `Pairs a slow mover (no sale in ${slow.holdingDays} days) with a best seller (${fast.sold30} sold in 30 days). Applies when both are in the cart.`,
         discount_type: 'Bundle',
-        discount_value: roundedSafePercentage(overstock, 10),
-        targetProducts: overstock.name,
+        discount_value: Math.max(5, Math.min(safeFor(slow, 10), safeFor(fast, 10))),
+        targetProducts: `Products: ${slow.name}, ${fast.name}`,
       });
     }
     if (weakCategory) {
@@ -994,49 +1033,23 @@ export function PromotionManagement() {
           status: getPromotionStatusForWindow(formData.start_date, formData.end_date),
         },
       });
-      let recipients: Notification[] = [];
-      let deliverySummary = { sent: 0, failed: 0, enabled: false, reason: '' };
-      let notifyWarning = '';
-      if (createdPromoId) {
-        try {
-          const notifyResult = await triggerPromotionEmailNotification(createdPromoId);
-          recipients = (notifyResult.recipients || []) as Notification[];
-          deliverySummary = {
-            sent: Number(notifyResult.delivery?.sent || 0),
-            failed: Number(notifyResult.delivery?.failed || 0),
-            enabled: Boolean(notifyResult.delivery?.enabled),
-            reason: String(notifyResult.delivery?.reason || ''),
-          };
-        } catch (notifyError: any) {
-          notifyWarning = String(notifyError?.message || 'notification_failed');
-        }
-      }
-
-      setNotifications([...notifications, ...recipients]);
-      setLastNotificationBatch(recipients);
-      setLastNotificationPromo({
-        promo_name: formData.promo_name,
-        start_date: formData.start_date,
-        end_date: formData.end_date,
-      });
       await promotionsQuery.refetch();
       if (pendingRecommendationId) {
         setHiddenRecommendationIds((prev) => new Set(prev).add(pendingRecommendationId));
       }
       setIsAddDialogOpen(false);
       setPendingRecommendationId(null);
-      setFormData({});
-      if (deliverySummary.enabled) {
-        toast.success(`Promotion created! Emails sent: ${deliverySummary.sent}, failed: ${deliverySummary.failed}.`);
-      } else {
-        const reason = notifyWarning || deliverySummary.reason;
-        if (reason) {
-          toast.warning(`Promotion created. Email send skipped (${reason}).`);
-        } else {
-          toast.success('Promotion created.');
-        }
+      toast.success('Promotion created. Choose who should receive the email, or skip for now.');
+      // Emails are sent only after the administrator picks the audience (Use Case 9).
+      if (createdPromoId) {
+        setNotifyTarget({
+          promo_id: createdPromoId,
+          promo_name: String(formData.promo_name ?? 'Promotion'),
+          start_date: formData.start_date,
+          end_date: formData.end_date,
+        });
       }
-      setShowNotificationDialog(recipients.length > 0);
+      setFormData({});
     } catch (error: any) {
       toast.error(error?.message ?? 'Unable to create promotion');
     } finally {
@@ -1140,8 +1153,10 @@ export function PromotionManagement() {
 
   const handleTogglePromotionStatus = async (promotion: Promotion) => {
     try {
-      const isCurrentlyActive = promotion.status === 'Active';
-      const nextDbStatus = isCurrentlyActive ? 'inactive' : 'active';
+      // Active and Upcoming promotions are enabled; pausing sets "inactive".
+      // Resuming lets the start/end window decide again.
+      const isCurrentlyActive = promotion.status !== 'Inactive';
+      const nextDbStatus = isCurrentlyActive ? 'inactive' : toDbStatusForWindow(promotion.start_date, promotion.end_date);
       const { error } = await supabase
         .from('promotion')
         .update({ status: nextDbStatus, updated_at: new Date().toISOString() })
@@ -1166,6 +1181,38 @@ export function PromotionManagement() {
       );
     } catch (error: any) {
       toast.error(error?.message ?? 'Unable to update promotion status');
+    }
+  };
+
+  const sendPromotionNotification = async (customerIds: string[]) => {
+    if (!notifyTarget) return;
+    setIsSendingNotify(true);
+    try {
+      const result = await triggerPromotionEmailNotification(notifyTarget.promo_id, customerIds);
+      const recipients = (result.recipients || []) as Notification[];
+      const sent = Number(result.delivery?.sent || 0);
+      const failed = Number(result.delivery?.failed || 0);
+      setNotifications((prev) => [...prev, ...recipients]);
+      setLastNotificationBatch(recipients);
+      setLastNotificationPromo({ promo_name: notifyTarget.promo_name, start_date: notifyTarget.start_date, end_date: notifyTarget.end_date });
+      await writeAuditLog({
+        actorUserId: user?.user_id,
+        actionType: 'send_promotion_notification',
+        entityType: 'promotion',
+        entityId: notifyTarget.promo_id,
+        metadata: { requested_recipients: customerIds.length, sent, failed },
+      });
+      if (result.delivery?.enabled) {
+        toast.success(`Emails sent: ${sent}, failed: ${failed}.`);
+      } else {
+        toast.warning(`Email sending is not available (${result.delivery?.reason || 'not configured'}).`);
+      }
+      setNotifyTarget(null);
+      setShowNotificationDialog(recipients.length > 0);
+    } catch (error: any) {
+      toast.error(error?.message ?? 'Unable to send promotion emails');
+    } finally {
+      setIsSendingNotify(false);
     }
   };
 
@@ -1802,8 +1849,21 @@ export function PromotionManagement() {
                             <span className="text-xs font-semibold">Rerun</span>
                           </Button>
 
+                          {promotion.status !== 'Ended' && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="text-sky-300 hover:text-sky-100 hover:bg-sky-400/15 h-8 px-2.5 flex items-center gap-1.5 border border-sky-500/40 hover:border-sky-400 rounded-lg transition-colors"
+                              onClick={() => setNotifyTarget({ promo_id: promotion.promo_id, promo_name: promotion.promo_name, start_date: promotion.start_date, end_date: promotion.end_date })}
+                              title="Email this promotion to a chosen group of customers"
+                            >
+                              <Mail className="w-3.5 h-3.5" />
+                              <span className="text-xs font-semibold">Notify</span>
+                            </Button>
+                          )}
+
                           {/* Activate / Deactivate Toggle for non-Ended promotions */}
-                          {promotion.status === 'Active' ? (
+                          {promotion.status === 'Active' || promotion.status === 'Upcoming' ? (
                             <Button
                               size="sm"
                               variant="ghost"
@@ -1812,7 +1872,7 @@ export function PromotionManagement() {
                               title="Click to Pause / Deactivate Promotion"
                             >
                               <ToggleRight className="w-4 h-4 text-emerald-400" />
-                              <span className="text-xs font-semibold">Active</span>
+                              <span className="text-xs font-semibold">{promotion.status === 'Upcoming' ? 'Scheduled' : 'Active'}</span>
                             </Button>
                           ) : promotion.status !== 'Ended' ? (
                             <Button
@@ -1853,6 +1913,16 @@ export function PromotionManagement() {
           />
         </CardContent>
       </Card>
+
+      <PromotionNotifyDialog
+        key={notifyTarget?.promo_id ?? 'none'}
+        open={Boolean(notifyTarget)}
+        onOpenChange={(open) => !open && setNotifyTarget(null)}
+        promoName={notifyTarget?.promo_name ?? ''}
+        audience={emailAudience}
+        sending={isSendingNotify}
+        onSend={sendPromotionNotification}
+      />
 
       {/* Notification Confirmation Dialog */}
       <Dialog open={showNotificationDialog} onOpenChange={setShowNotificationDialog}>

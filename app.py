@@ -762,9 +762,10 @@ def format_prediction_period_label(value):
     return sync_format_prediction_period_label(value)
 
 
-def sync_promotion_notifications(promo_id):
+def sync_promotion_notifications(promo_id, customer_ids=None):
     return promotion_sync_notifications(
         promo_id,
+        customer_ids=customer_ids,
         safe_int=safe_int,
         table_exists=table_exists,
         supabase=supabase(),
@@ -2240,7 +2241,10 @@ def api_promotion_notify(promo_id):
         if not promo_id:
             return {"ok": False, "error": "missing_promo_id"}, 400
 
-        sync_promotion_notifications(promo_id)
+        # Recipients chosen in the notification dialog (Use Case 9); None = default audience.
+        raw_ids = (request.get_json(silent=True) or {}).get("customer_ids")
+        customer_ids = [str(cid) for cid in raw_ids] if isinstance(raw_ids, list) else None
+        sync_promotion_notifications(promo_id, customer_ids=customer_ids)
         delivery = send_promotion_notifications_via_brevo(promo_id)
         delivery_results = {}
         for result in (delivery.get("results", []) if isinstance(delivery, dict) else []):
@@ -2306,7 +2310,10 @@ def api_promotion_notify_public(promo_id):
         if not promo_id:
             return {"ok": False, "error": "missing_promo_id"}, 400
 
-        sync_promotion_notifications(promo_id)
+        # Recipients chosen in the notification dialog (Use Case 9); None = default audience.
+        raw_ids = (request.get_json(silent=True) or {}).get("customer_ids")
+        customer_ids = [str(cid) for cid in raw_ids] if isinstance(raw_ids, list) else None
+        sync_promotion_notifications(promo_id, customer_ids=customer_ids)
         delivery = send_promotion_notifications_via_brevo(promo_id)
         delivery_results = {}
         for result in (delivery.get("results", []) if isinstance(delivery, dict) else []):

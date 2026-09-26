@@ -34,10 +34,18 @@ def sync_promotion_notifications(
     build_sale_status_maps,
     fetch_rows,
     build_customer_lookup,
+    customer_ids=None,
 ):
+    """Create pending notification rows for a promotion.
+
+    customer_ids: the recipients chosen by the administrator (Use Case 9: filter
+    customer cohorts, then dispatch). When omitted, falls back to past buyers of
+    the promoted products, then to all active customers with an email.
+    """
     promo_id = str(promo_id or "").strip()
     if not promo_id or not table_exists("notification"):
         return
+    selected_ids = None if customer_ids is None else {str(cid).strip() for cid in customer_ids if str(cid).strip()}
 
     supabase.table("notification").delete().eq("promo_id", promo_id).execute()
 
@@ -45,8 +53,17 @@ def sync_promotion_notifications(
         supabase.table("promo_product").select("product_id").eq("promo_id", promo_id).execute().data or []
     )
     customer_lookup = build_customer_lookup()
-    customer_ids = set()
-    product_ids = {str(row.get("product_id") or "").strip() for row in promo_product_rows if row.get("product_id")}
+    if selected_ids is not None:
+        # Only the chosen cohort, and only active customers with an email.
+        customer_ids = {
+            cid for cid in selected_ids
+            if str(customer_lookup.get(cid, {}).get("email") or "").strip()
+            and str(customer_lookup.get(cid, {}).get("status") or "active").strip().lower() == "active"
+        }
+        product_ids = set()
+    else:
+        customer_ids = set()
+    product_ids = product_ids if selected_ids is not None else {str(row.get("product_id") or "").strip() for row in promo_product_rows if row.get("product_id")}
 
     if product_ids:
         completed_sales, _ = build_sale_status_maps()
@@ -66,7 +83,7 @@ def sync_promotion_notifications(
             if customer_id:
                 customer_ids.add(customer_id)
 
-    if not customer_ids:
+    if not customer_ids and selected_ids is None:
         # React-created promotions may not have promo_product link rows yet.
         # For marketing campaigns, fall back to active customers with email.
         customer_ids = {
