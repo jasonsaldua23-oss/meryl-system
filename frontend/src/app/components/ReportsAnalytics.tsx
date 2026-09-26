@@ -2924,57 +2924,130 @@ export function ReportsAnalytics() {
       metaRow.getCell(1).value = `Period: ${selectedRangeLabel}   |   Generated: ${timestamp}   |   Prepared by: ${businessSummary.preparedBy}`;
       metaRow.getCell(1).font = { size: 9, color: { argb: 'FF555555' } };
 
-      let rowIndex = logoRows + 5;
-      let columnCount = 1;
-      let headerCells: string[] = [];
-      let expectHeader = false;
-      const widths: number[] = [];
+      // Group the rows into sections first so every column can be sized and
+      // aligned from its contents: numbers and percentages right, text left
+      // and wrapped, so nothing spills into the next column.
+      type Block =
+        | { kind: 'blank' }
+        | { kind: 'title'; text: string }
+        | { kind: 'header'; cells: string[]; numericCols: Set<number> }
+        | { kind: 'data'; cells: unknown[]; header: string[] };
       const isNumeric = (value: unknown) => typeof value === 'number' || (typeof value === 'string' && /^-?\d+(\.\d+)?$/.test(value.trim()));
+      const isPercent = (value: unknown) => typeof value === 'string' && /^[-+]?[\d,]+(\.\d+)?%$/.test(value.trim());
+      const blocks: Block[] = [];
+      let currentHeader: Extract<Block, { kind: 'header' }> | null = null;
+      let expectHeader = false;
       lines.forEach((entry) => {
         if (entry === '') {
-          rowIndex += 1;
+          blocks.push({ kind: 'blank' });
           return;
         }
         const cells = entry as unknown[];
         const first = String(cells[0] ?? '');
-        const row = sheet.getRow(rowIndex);
         if (cells.length === 1 && /^===.*===$/.test(first.trim())) {
-          const cell = row.getCell(1);
-          cell.value = first.replace(/^=+\s*|\s*=+$/g, '');
-          cell.font = { bold: true, size: 12 };
-          cell.border = { bottom: { style: 'medium', color: { argb: 'FF000000' } } };
+          blocks.push({ kind: 'title', text: first.replace(/^=+\s*|\s*=+$/g, '') });
           expectHeader = true;
         } else if (expectHeader) {
-          headerCells = cells.map((c) => String(c ?? ''));
-          cells.forEach((value, col) => {
-            const cell = row.getCell(col + 1);
-            cell.value = String(value ?? '');
-            cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F1F1F' } };
-            cell.alignment = { vertical: 'middle', horizontal: col === 0 ? 'left' : 'center', wrapText: true };
-          });
+          currentHeader = { kind: 'header', cells: cells.map((c) => String(c ?? '')), numericCols: new Set() };
+          blocks.push(currentHeader);
           expectHeader = false;
         } else {
-          cells.forEach((value, col) => {
-            const cell = row.getCell(col + 1);
-            const header = headerCells[col] ?? '';
-            if (isNumeric(value)) {
-              cell.value = Number(value);
-              cell.numFmt = /php|revenue|sales|price|valuation|amount|value|collected|discount/i.test(header) ? '#,##0.00' : '#,##0';
-              cell.alignment = { horizontal: 'right' };
-            } else {
-              cell.value = String(value ?? '');
-            }
-            cell.border = { bottom: { style: 'thin', color: { argb: 'FFDDDDDD' } } };
-            widths[col] = Math.max(widths[col] ?? 0, String(value ?? '').length);
+          blocks.push({ kind: 'data', cells, header: currentHeader?.cells ?? [] });
+        }
+      });
+      // A column is numeric when every filled cell under that header is a number or percentage.
+      blocks.forEach((block, index) => {
+        if (block.kind !== 'header') return;
+        block.cells.forEach((_, col) => {
+          let seen = false;
+          let allNumeric = true;
+          for (let i = index + 1; i < blocks.length; i += 1) {
+            const next = blocks[i];
+            if (next.kind === 'title' || next.kind === 'header') break;
+            if (next.kind !== 'data') continue;
+            const value = next.cells[col];
+            if (value === '' || value === null || value === undefined) continue;
+            seen = true;
+            if (!isNumeric(value) && !isPercent(value)) allNumeric = false;
+          }
+          if (seen && allNumeric) block.numericCols.add(col);
+        });
+      });
+
+      // Column widths: long text wraps at MAX_TEXT_WIDTH instead of overflowing.
+      const MAX_TEXT_WIDTH = 42;
+      const widths: number[] = [];
+      let columnCount = 1;
+      blocks.forEach((block) => {
+        if (block.kind === 'header') {
+          block.cells.forEach((value, col) => {
+            const longestWord = Math.max(...value.split(/\s+/).map((word) => word.length));
+            widths[col] = Math.max(widths[col] ?? 0, Math.min(value.length, Math.max(longestWord, 14)) + 4);
+          });
+        } else if (block.kind === 'data') {
+          columnCount = Math.max(columnCount, block.cells.length);
+          block.cells.forEach((value, col) => {
+            const length = isNumeric(value) ? Number(value).toLocaleString('en-US', { maximumFractionDigits: 2 }).length + 3 : String(value ?? '').length;
+            widths[col] = Math.max(widths[col] ?? 0, Math.min(MAX_TEXT_WIDTH, length + 3));
           });
         }
-        columnCount = Math.max(columnCount, cells.length);
-        rowIndex += 1;
       });
       for (let col = 0; col < Math.max(columnCount, 3); col += 1) {
-        sheet.getColumn(col + 1).width = Math.min(60, Math.max(col === 0 ? 28 : 14, (widths[col] ?? 0) + 2));
+        widths[col] = Math.max(col === 0 ? 24 : 12, widths[col] ?? 0);
+        sheet.getColumn(col + 1).width = widths[col];
       }
+
+      const moneyHeader = /php|revenue|sales|price|valuation|amount|value|collected|discount|cost|profit/i;
+      let rowIndex = logoRows + 5;
+      blocks.forEach((block) => {
+        const row = sheet.getRow(rowIndex);
+        rowIndex += 1;
+        if (block.kind === 'blank') return;
+        if (block.kind === 'title') {
+          const cell = row.getCell(1);
+          cell.value = block.text;
+          cell.font = { bold: true, size: 12 };
+          cell.border = { bottom: { style: 'medium', color: { argb: 'FF000000' } } };
+          row.height = 20;
+          return;
+        }
+        if (block.kind === 'header') {
+          let lines = 1;
+          block.cells.forEach((value, col) => {
+            const cell = row.getCell(col + 1);
+            cell.value = value;
+            cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F1F1F' } };
+            cell.alignment = { vertical: 'middle', horizontal: block.numericCols.has(col) ? 'right' : 'left', wrapText: true, indent: 1 };
+            lines = Math.max(lines, Math.ceil(value.length / Math.max(1, widths[col] - 3)));
+          });
+          row.height = 16 * lines + 4;
+          return;
+        }
+        let lines = 1;
+        const rowLabel = String(block.cells[0] ?? '');
+        block.cells.forEach((value, col) => {
+          const cell = row.getCell(col + 1);
+          const header = block.header[col] ?? '';
+          if (isPercent(value)) {
+            cell.value = Number(String(value).replace(/[,%+]/g, '')) / 100;
+            cell.numFmt = '0.0%';
+            cell.alignment = { horizontal: 'right', vertical: 'top', indent: 1 };
+          } else if (isNumeric(value)) {
+            cell.value = Number(value);
+            const isMoney = moneyHeader.test(header) || /\(php\)/i.test(rowLabel);
+            cell.numFmt = isMoney ? '#,##0.00' : '#,##0';
+            cell.alignment = { horizontal: 'right', vertical: 'top', indent: 1 };
+          } else {
+            const text = String(value ?? '');
+            cell.value = text;
+            cell.alignment = { horizontal: 'left', vertical: 'top', wrapText: true, indent: 1 };
+            lines = Math.max(lines, Math.ceil(text.length / Math.max(1, widths[col] - 3)));
+          }
+          cell.border = { bottom: { style: 'thin', color: { argb: 'FFDDDDDD' } } };
+        });
+        row.height = 15 * lines + 3;
+      });
 
       const buffer = await workbook.xlsx.writeBuffer();
       const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });

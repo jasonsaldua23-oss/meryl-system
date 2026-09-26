@@ -1,5 +1,6 @@
 from collections import defaultdict
 from datetime import datetime
+from datetime import timedelta, timezone
 import base64
 from email.message import EmailMessage
 from html import escape
@@ -251,6 +252,72 @@ def _product_price(product):
     return "Ask in store"
 
 
+def _attach_stock(product_rows, inventory_rows, category_rows):
+    """Give each product its shelf price, sellable stock and category name,
+    using the same inventory rules as the POS."""
+    inventory_by_product = {
+        str(row.get("product_id") or "").strip(): row for row in inventory_rows if row.get("product_id")
+    }
+    category_names = {
+        str(row.get("category_id") or "").strip(): str(row.get("category_name") or "").strip()
+        for row in category_rows
+    }
+    enriched = []
+    for product in product_rows:
+        row = dict(product)
+        inventory = inventory_by_product.get(str(row.get("product_id") or "").strip(), {})
+        on_hand = _to_number(inventory.get("stock_quantity", row.get("stock_quantity")))
+        reserved = _to_number(inventory.get("reserved_quantity") or inventory.get("held_stock"))
+        row["available_stock"] = max(0, on_hand - reserved)
+        row["expiration_date"] = str(inventory.get("expiration_date") or "")[:10]
+        if _to_number(inventory.get("srp")) > 0:
+            row["srp"] = inventory.get("srp")
+        if not row.get("category_name"):
+            row["category_name"] = category_names.get(str(row.get("category_id") or "").strip(), "")
+        enriched.append(row)
+    return enriched
+
+
+def _to_number(value):
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _is_sellable(product, today):
+    """Mirrors the POS: active, in stock (after holds) and not expired."""
+    status = str(product.get("status") or "active").strip().lower()
+    if status not in ("active", "available"):
+        return False
+    if _to_number(product.get("available_stock", product.get("stock_quantity"))) <= 0:
+        return False
+    expiration = str(product.get("expiration_date") or "")[:10]
+    return not expiration or expiration >= today
+
+
+def _top_picks(products, limit=2):
+    """One card per style (brand + name), listing every size still in stock,
+    best-stocked styles first."""
+    styles = {}
+    for product in products:
+        name = str(product.get("product_name") or product.get("name") or "").strip()
+        brand = str(product.get("brand") or "").strip()
+        key = (brand.lower(), name.lower())
+        style = styles.setdefault(key, {"product": product, "sizes": set(), "stock": 0.0})
+        style["stock"] += _to_number(product.get("available_stock", product.get("stock_quantity")))
+        size = str(product.get("size") or "").strip()
+        if size and size.upper() != "N/A":
+            style["sizes"].add(size)
+    ranked = sorted(styles.values(), key=lambda style: style["stock"], reverse=True)
+    picks = []
+    for style in ranked[:limit]:
+        pick = dict(style["product"])
+        pick["sizes_in_stock"] = sorted(style["sizes"], key=lambda s: (_to_number(s) == 0, _to_number(s), s))
+        picks.append(pick)
+    return picks
+
+
 def _product_matches_target(product, target_text):
     parsed = _parse_target_products(target_text)
     if not parsed["categories"] and not parsed["products"]:
@@ -425,7 +492,9 @@ def _build_promotion_email(
         matching_products = [
             product for product in product_rows if _product_matches_target(product, target_products)
         ]
-    top_picks = matching_products[:2]
+    # Only recommend what a customer can actually buy today.
+    today = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")  # Asia/Manila (no DST)
+    top_picks = _top_picks([product for product in matching_products if _is_sellable(product, today)])
     safe_target_label = escape(_target_label(target_products, matching_products, linked_product_ids=linked_product_ids))
 
     if not top_picks:
@@ -439,11 +508,13 @@ def _build_promotion_email(
         for index, product in enumerate(top_picks, start=1):
             product_name = escape(str(product.get("product_name") or product.get("name") or f"Product {index}"))
             brand = escape(str(product.get("brand") or "Meryl Shoes"))
-            variant = " / ".join(
+            color = str(product.get("color") or "").strip()
+            sizes = product.get("sizes_in_stock") or []
+            variant = " · ".join(
                 part
                 for part in (
-                    str(product.get("color") or "").strip(),
-                    str(product.get("size") or "").strip(),
+                    color if color.lower() not in ("", "default", "n/a") else "",
+                    ("Sizes in stock: " if len(sizes) > 1 else "Size in stock: ") + ", ".join(sizes) if sizes else "",
                 )
                 if part
             )
@@ -565,7 +636,11 @@ def send_promotion_notifications_via_gmail(
     start_date = str(promo.get("start_date") or "").strip()[:10]
     end_date = str(promo.get("end_date") or "").strip()[:10]
     target_products = str(promo.get("target_products") or promo.get("target_product") or "All Products").strip()
-    product_rows = fetch_rows("product")
+    product_rows = _attach_stock(
+        fetch_rows("product"),
+        fetch_rows("inventory") if table_exists("inventory") else [],
+        fetch_rows("category") if table_exists("category") else [],
+    )
     promo_product_rows = fetch_rows("promo_product")
 
     notification_rows = (

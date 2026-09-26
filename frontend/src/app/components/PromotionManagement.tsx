@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Badge } from './ui/badge';
 import { Progress } from './ui/progress';
 import { TablePagination } from './ui/table-pagination';
-import { Tag, Plus, Edit, Trash2, TrendingUp, Coins, ShoppingCart, Percent, Mail, CheckCircle, X, Check, ToggleLeft, ToggleRight, Power, Copy, RotateCcw, Calendar, Search, Filter } from 'lucide-react';
+import { Tag, Plus, Edit, Trash2, TrendingUp, Coins, ShoppingCart, Percent, Mail, CheckCircle, X, Check, ToggleLeft, ToggleRight, Power, Copy, RotateCcw, Calendar, Search, Filter, ArrowRight } from 'lucide-react';
 import { toast } from 'sonner';
 import { useCustomers, useProducts, usePromotions, usePromotionsMutations, useSales } from '../../lib/hooks';
 import { BACKEND_BASE, getBackendAuthHeaders, useAuth } from '../../lib/auth-context';
@@ -2160,6 +2160,8 @@ export function PromotionForm({ formData, setFormData, categoryOptions, productO
     </div>
   );
   const fieldClass = 'bg-[#1D1D26] border-[#313342] text-white placeholder:text-zinc-500 focus-visible:ring-yellow-400/40';
+  // Sized to its content so the calendar button sits right after the date.
+  const dateFieldClass = `${fieldClass} w-[13rem] tabular-nums [&::-webkit-calendar-picker-indicator]:ml-1 [&::-webkit-calendar-picker-indicator]:cursor-pointer [&::-webkit-calendar-picker-indicator]:opacity-60 [&::-webkit-calendar-picker-indicator:hover]:opacity-100`;
 
   return (
     <div className="space-y-6 py-1">
@@ -2368,7 +2370,7 @@ export function PromotionForm({ formData, setFormData, categoryOptions, productO
       {/* 4. Schedule */}
       <section>
         {sectionTitle(4, 'Schedule', 'Starts and ends automatically')}
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="flex flex-wrap items-end gap-x-3 gap-y-2">
           <div className="space-y-1.5">
             <Label htmlFor="start_date" className="text-xs text-zinc-400">Starts</Label>
             <Input
@@ -2388,9 +2390,10 @@ export function PromotionForm({ formData, setFormData, categoryOptions, productO
                       : formData.end_date,
                 });
               }}
-              className={fieldClass}
+              className={dateFieldClass}
             />
           </div>
+          <ArrowRight className="mb-2.5 hidden h-4 w-4 text-zinc-500 sm:block" aria-hidden />
           <div className="space-y-1.5">
             <Label htmlFor="end_date" className="text-xs text-zinc-400">Ends</Label>
             <Input
@@ -2400,7 +2403,7 @@ export function PromotionForm({ formData, setFormData, categoryOptions, productO
               min={normalizePromotionDateTime(formData.start_date, 'start') || minPromotionDate}
               value={normalizePromotionDateTime(formData.end_date, 'end')}
               onChange={(e) => setFormData({ ...formData, end_date: e.target.value })}
-              className={fieldClass}
+              className={dateFieldClass}
             />
           </div>
         </div>
