@@ -18,6 +18,7 @@ import { useInventory, useProducts, useReturns, useSales, useUsers } from "../..
 import { supabase } from "../../lib/supabase";
 import { saveReceiptProof, getAllReceiptProofs, StoredReceiptProof } from "../../lib/receipt-proof-store";
 import { parseReplacementNote, resolveReplacementProduct } from "../../lib/replacement-details";
+import { formatStoreDate, formatStoreDateTime, parseDbTimestamp, recordMoment, storeDateDigits } from "../../lib/datetime";
 import merylLogoBw from "../../assets/Meryl_Logo_BW.svg";
 import { shortId } from "./ui/utils";
 import { TablePagination } from "./ui/table-pagination";
@@ -51,6 +52,7 @@ type ReturnRow = {
   user_id: string;
   customerName: string;
   return_date: string;
+  returnDateTime: string;
   total_refund: number;
   return_type: string;
   return_status: string;
@@ -171,9 +173,7 @@ function buildClientId() {
 }
 
 function formatDate(v?: string | null) {
-  if (!v) return "N/A";
-  const d = new Date(v);
-  return Number.isNaN(d.getTime()) ? "N/A" : d.toISOString().slice(0, 10);
+  return formatStoreDate(parseDbTimestamp(v));
 }
 
 function formatCurrency(value: number) {
@@ -194,13 +194,7 @@ function normalizeProductName(value: string) {
 }
 
 function formatReceiptNumber(salesId?: string, transactionDate?: string) {
-  let dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  if (transactionDate) {
-    const d = new Date(transactionDate);
-    if (!Number.isNaN(d.getTime())) {
-      dateStr = d.toISOString().slice(0, 10).replace(/-/g, "");
-    }
-  }
+  const dateStr = storeDateDigits(parseDbTimestamp(transactionDate) ?? new Date());
   if (!salesId) return `RCP-${dateStr}-0000`;
   if (salesId.startsWith("RCP-") || salesId.startsWith("INV-") || salesId.startsWith("SAL-")) return salesId;
   const cleanSuffix = salesId.replace(/[^a-zA-Z0-9]/g, "").slice(-4).toUpperCase();
@@ -1397,7 +1391,8 @@ export function ReturnManagement() {
         display_sales_id: salesDisplayMap.get(String(row.sales_id ?? "")) ?? "RCP-000",
         user_id: String(row.user_id ?? sale?.user_id ?? ""),
         customerName: customer?.name ?? "Walk-in Customer",
-        return_date: formatDate(row.return_date ?? row.created_at),
+        return_date: formatStoreDate(recordMoment(row.return_date, row.created_at)),
+        returnDateTime: formatStoreDateTime(recordMoment(row.return_date, row.created_at)),
         total_refund: Number(row.total_refund ?? 0),
         return_type: String(row.return_type ?? "Replacement"),
         return_status: String(row.return_status ?? "Completed"),
@@ -3424,7 +3419,7 @@ export function ReturnManagement() {
                 {[
                   ["Slip No.", printExchangeSlip.display_return_id, true],
                   ["Orig. Receipt", printExchangeSlip.display_sales_id, true],
-                  ["Date", printExchangeSlip.return_date, false],
+                  ["Date", printExchangeSlip.returnDateTime, false],
                   ["Customer", printExchangeSlip.customerName, false],
                   ["Orig. Cashier", withStaffCode(printExchangeSlip.originalCashier, printExchangeSlip.originalCashierCode), false],
                   ["Processed By", withStaffCode(printExchangeSlip.processedBy, printExchangeSlip.staffCode), false],

@@ -17,6 +17,7 @@ import { getRoleGroup, useAuth } from "../../lib/auth-context";
 import { logAuditEvent } from "../../lib/api/audit-logger";
 import { supabase } from "../../lib/supabase";
 import { cleanProductImageUrl } from "../../lib/image-utils";
+import { formatStoreDateTime, storeDateDigits, storeToday } from "../../lib/datetime";
 import merylLogoBw from "../../assets/Meryl_Logo_BW.svg";
 
 type CartItem = {
@@ -130,7 +131,7 @@ function getShoeSizeConversion(euSize: string, gender?: string): string {
 function isExpiredInventoryDate(value?: string | null) {
   const date = String(value ?? "").slice(0, 10);
   if (!date) return false;
-  return date < new Date().toISOString().slice(0, 10);
+  return date < storeToday();
 }
 
 function isSellableProduct(product: ProductVariant) {
@@ -605,7 +606,7 @@ export function PointOfSale() {
 
   const activePromotionRules = useMemo<ActivePromotionRule[]>(() => {
     const rows = (promotionsQuery.data as any[]) ?? [];
-    const today = new Date().toISOString().slice(0, 10);
+    const today = storeToday();
     return rows
       .map((row) => {
         const status = String(row.status ?? "").toLowerCase();
@@ -1262,7 +1263,7 @@ export function PointOfSale() {
     }
 
 function formatReceiptNumber(salesId?: string) {
-  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  const dateStr = storeDateDigits();
   if (!salesId) return `RCP-${dateStr}-${Math.floor(1000 + Math.random() * 9000)}`;
   if (salesId.startsWith("RCP-") || salesId.startsWith("INV-") || salesId.startsWith("SAL-")) return salesId;
   const cleanSuffix = salesId.replace(/[^a-zA-Z0-9]/g, "").slice(-4).toUpperCase();
@@ -1275,14 +1276,7 @@ function formatReceiptNumber(salesId?: string) {
     const receipt = {
       receiptNumber,
       rawSalesId: data?.sales_id,
-      date: new Date().toLocaleString("en-US", {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-      }),
+      date: formatStoreDateTime(new Date()),
       customerName: receiptCustomerName,
       items: [...cart],
       subtotal: calculateSubtotal(),

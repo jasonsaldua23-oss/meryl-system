@@ -16,6 +16,7 @@ import { useAuth } from "../../lib/auth-context";
 import { supabase } from "../../lib/supabase";
 import { writeAuditLog } from "../../lib/audit";
 import { parseReplacementNote, resolveReplacementProduct } from "../../lib/replacement-details";
+import { formatStoreDate, formatStoreDateTime, parseDbTimestamp, recordMoment, storeDateDigits, storeToday } from "../../lib/datetime";
 import { TablePagination } from "./ui/table-pagination";
 
 type SaleStatus = "Completed" | "Pending" | "Voided";
@@ -28,9 +29,7 @@ function getStatus(paymentStatus?: string | null): SaleStatus {
 }
 
 function formatDate(v?: string | null) {
-  if (!v) return "N/A";
-  const d = new Date(v);
-  return Number.isNaN(d.getTime()) ? "N/A" : d.toISOString().slice(0, 10);
+  return formatStoreDate(parseDbTimestamp(v));
 }
 
 function formatSalesDisplayId(sequence: number) {
@@ -92,21 +91,10 @@ export function SalesManagement() {
     const totalAmount = Number(sale.total_amount ?? 0);
     const vatableSales = Number((totalAmount / 1.12).toFixed(2));
     const vatAmount = Number((totalAmount - vatableSales).toFixed(2));
-    const rawDate = sale.transaction_date ? new Date(sale.transaction_date) : new Date();
-    const dateFormatted = Number.isNaN(rawDate.getTime())
-      ? "N/A"
-      : rawDate.toLocaleString("en-US", {
-          year: "numeric",
-          month: "short",
-          day: "numeric",
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-        });
-
-    const dateDigits = Number.isNaN(rawDate.getTime())
-      ? new Date().toISOString().slice(0, 10).replace(/-/g, "")
-      : rawDate.toISOString().slice(0, 10).replace(/-/g, "");
+    // Actual purchase moment, shown in store time (Asia/Manila).
+    const purchasedAt: Date | null = sale.transactionMoment ?? null;
+    const dateFormatted = formatStoreDateTime(purchasedAt);
+    const dateDigits = storeDateDigits(purchasedAt);
     const saleIdStr = String(sale.sales_id ?? "");
     const cleanSuffix = saleIdStr.replace(/[^a-zA-Z0-9]/g, "").slice(-4).toUpperCase() || "0001";
     const receiptNumber = `RCP-${dateDigits}-${cleanSuffix}`;
@@ -220,11 +208,9 @@ export function SalesManagement() {
       const salesIdSequence = new Map<string, string>();
       [...sales]
         .sort((a, b) => {
-          const aTime = new Date(a.transaction_date ?? "").getTime();
-          const bTime = new Date(b.transaction_date ?? "").getTime();
-          const safeATime = Number.isNaN(aTime) ? 0 : aTime;
-          const safeBTime = Number.isNaN(bTime) ? 0 : bTime;
-          return safeATime - safeBTime;
+          const aTime = recordMoment(a.transaction_date, (a as any).created_at)?.getTime() ?? 0;
+          const bTime = recordMoment(b.transaction_date, (b as any).created_at)?.getTime() ?? 0;
+          return aTime - bTime;
         })
         .forEach((sale, index) => {
           salesIdSequence.set(String(sale.sales_id ?? ""), formatSalesDisplayId(index + 1));
@@ -237,11 +223,13 @@ export function SalesManagement() {
         const details = Array.isArray((sale as any).sales_details) ? (sale as any).sales_details : [];
         const salesId = String(sale.sales_id ?? "");
         const replacementInfo = replacementBySale.get(salesId) ?? { count: 0, additional: 0, credits: 0, lastActivity: null, details: [] };
+        const transactionMoment = recordMoment(sale.transaction_date, (sale as any).created_at, payment?.created_at);
         return {
           sales_id: salesId,
           display_sales_id: salesIdSequence.get(salesId) ?? "SALES-000",
           payment_id: payment?.payment_id ?? null,
-          transaction_date: formatDate(sale.transaction_date),
+          transaction_date: formatStoreDate(transactionMoment),
+          transactionMoment,
           total_amount: Number(sale.total_amount ?? 0),
           payment_method: payment?.payment_method ?? "N/A",
           user_id: String(sale.user_id ?? cashier?.user_id ?? ""),
@@ -488,7 +476,7 @@ export function SalesManagement() {
 
   const completedSales = visibleSales.filter((s) => s.status === "Completed");
   const totalRevenue = completedSales.reduce((sum, sale) => sum + sale.total_amount, 0);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = storeToday();
   const todaySales = completedSales.filter((s) => s.transaction_date === today);
 
   const handleStatusUpdate = async (sale: any, nextStatus: SaleStatus) => {
@@ -990,7 +978,7 @@ export function SalesManagement() {
                                   )}
                                   <div>
                                     <p className="text-[11px] text-zinc-400 font-medium">Transaction Date</p>
-                                    <p className="font-semibold text-zinc-100 mt-0.5">{sale.transaction_date}</p>
+                                    <p className="font-semibold text-zinc-100 mt-0.5">{formatStoreDateTime(sale.transactionMoment)}</p>
                                   </div>
                                   <div>
                                     <p className="text-[11px] text-zinc-400 font-medium">Payment Method</p>
