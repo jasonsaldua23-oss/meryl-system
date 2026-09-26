@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildBreakdownSlots } from "../app/components/ReportsAnalytics";
+import { buildBreakdownSlots, storeHourSlots } from "../app/components/ReportsAnalytics";
 
 const NOW = new Date(2026, 8, 26, 14, 30, 0); // Sat, Sep 26, 2026 2:30 PM local
 
@@ -56,6 +56,42 @@ describe("Sales Breakdown periods", () => {
   it("annually: the last 5 years", () => {
     const { slots } = buildBreakdownSlots("annually", undefined, undefined, NOW);
     expect(slots.map((s) => s.label)).toEqual(["2022", "2023", "2024", "2025", "2026"]);
+  });
+
+  it("custom 1 day: store hours of that day (like Daily)", () => {
+    const { slots, unit, rangeLabel } = buildBreakdownSlots("custom", "2026-08-23", "2026-08-23", NOW);
+    expect(unit).toBe("hour");
+    const storeSlots = slots.filter((slot) => !slot.offHours);
+    expect(storeSlots).toHaveLength(12);
+    expect(storeSlots[0].label).toBe("7:30 AM – 8:30 AM");
+    expect(rangeLabel).toBe("Store hours 7:30 AM – 7:30 PM, Aug 23, 2026");
+  });
+
+  it("custom 3 days: store hours of each day, labelled with the date", () => {
+    const { slots, unit } = buildBreakdownSlots("custom", "2026-08-23", "2026-08-25", NOW);
+    expect(unit).toBe("hour");
+    const storeSlots = slots.filter((slot) => !slot.offHours);
+    expect(storeSlots).toHaveLength(36);
+    expect(storeSlots[0].label).toBe("Aug 23 · 7:30 AM – 8:30 AM");
+    expect(storeSlots[12].label).toBe("Aug 24 · 7:30 AM – 8:30 AM");
+    expect(storeSlots[35].label).toBe("Aug 25 · 6:30 PM – 7:30 PM");
+    // Every minute of the three days is covered exactly once (off-hours rows included).
+    expect(slots[0].start).toEqual(new Date(2026, 7, 23));
+    expect(slots[slots.length - 1].end).toEqual(new Date(2026, 7, 25, 23, 59, 59, 999));
+    slots.slice(1).forEach((slot, i) => expect(slot.start.getTime()).toBe(slots[i].end.getTime() + 1));
+  });
+
+  it("custom 4+ days: one row per day", () => {
+    const { slots, unit } = buildBreakdownSlots("custom", "2026-08-23", "2026-08-26", NOW);
+    expect(unit).toBe("day");
+    expect(slots).toHaveLength(4);
+  });
+
+  it("chart store-hour periods skip the overnight hours and stop at the given time", () => {
+    const slots = storeHourSlots(new Date(2026, 7, 23, 7, 30), new Date(2026, 7, 24, 10, 0));
+    expect(slots).toHaveLength(12 + 3); // all of Aug 23, then 7:30, 8:30, 9:30 on Aug 24
+    expect(slots[11].start).toEqual(new Date(2026, 7, 23, 18, 30));
+    expect(slots[12].start).toEqual(new Date(2026, 7, 24, 7, 30));
   });
 
   it("custom: one row per day, clipped to the range", () => {

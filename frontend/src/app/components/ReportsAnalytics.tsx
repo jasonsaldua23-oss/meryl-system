@@ -347,6 +347,24 @@ function clockLabel(date: Date) {
   return date.toLocaleTimeString("en-US", { hour: "numeric", ...(date.getMinutes() ? { minute: "2-digit" } : {}) });
 }
 
+/** Longest range (in days) shown hour by hour; longer ranges get one point per day. */
+export const HOURLY_MAX_DAYS = 3;
+
+/**
+ * Hourly store-hour periods (7:30-8:30 AM ... 6:30-7:30 PM) for every day from
+ * `from` to `to`, skipping the overnight hours. Only periods starting by `to`.
+ */
+export function storeHourSlots(from: Date, to: Date) {
+  const slots: Array<{ start: Date; end: Date; day: Date }> = [];
+  for (let day = startOfDay(from); day <= to; day = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1)) {
+    const closing = storeClosing(day);
+    for (let start = storeOpening(day); start < closing && start <= to; start = new Date(start.getTime() + 3600000)) {
+      slots.push({ start, end: new Date(Math.min(start.getTime() + 3600000, closing.getTime()) - 1), day });
+    }
+  }
+  return slots;
+}
+
 type TrendBucketMode = 'hourly' | 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'annually';
 
 function startOfDay(date: Date) {
@@ -459,6 +477,11 @@ function salesTrendFrameUncapped(timeRange: ReportPeriod, customStartDate?: stri
     return { start: window.start, end: window.now, mode: 'monthly' as TrendBucketMode };
   }
 
+  if (timeRange === 'custom' && window.days <= HOURLY_MAX_DAYS) {
+    // 1-3 day ranges: store hours of each day, hour by hour.
+    return { start: storeOpening(window.start), end: new Date(storeClosing(startOfDay(window.now)).getTime() - 1), mode: 'hourly' as TrendBucketMode };
+  }
+
   return {
     start: window.start,
     end: window.now,
@@ -499,18 +522,23 @@ export function buildBreakdownSlots(
     }
   };
 
-  if (timeRange === 'daily') {
-    const day = startOfDay(window.start);
+  // One day: "Before opening", the hourly store-hour slots, then "After closing".
+  // Off-hours rows keep early/late sales and are shown only when they have any.
+  const addStoreHoursDay = (day: Date, withDate: boolean) => {
     const opening = storeOpening(day);
     const closing = storeClosing(day);
-    // Sales rung up outside store hours are kept, in their own rows (shown only if any).
-    addSlot(day, new Date(opening.getTime() - 1), `Before opening (before ${clockLabel(opening)})`, true);
-    for (let start = opening; start < closing; start = new Date(start.getTime() + 3600000)) {
-      const next = new Date(Math.min(start.getTime() + 3600000, closing.getTime()));
-      addSlot(start, new Date(next.getTime() - 1), `${clockLabel(start)} – ${clockLabel(next)}`);
-    }
-    addSlot(closing, endOfDay(day), `After closing (after ${clockLabel(closing)})`, true);
-    rangeLabel = `Store hours ${clockLabel(opening)} – ${clockLabel(closing)}, ${shortDate(day, true)}`;
+    const prefix = withDate ? `${shortDate(day)} · ` : '';
+    addSlot(day, new Date(opening.getTime() - 1), `${prefix}Before opening (before ${clockLabel(opening)})`, true);
+    storeHourSlots(day, endOfDay(day)).forEach(({ start, end }) => {
+      addSlot(start, end, `${prefix}${clockLabel(start)} – ${clockLabel(new Date(end.getTime() + 1))}`);
+    });
+    addSlot(closing, endOfDay(day), `${prefix}After closing (after ${clockLabel(closing)})`, true);
+  };
+
+  if (timeRange === 'daily') {
+    const day = startOfDay(window.start);
+    addStoreHoursDay(day, false);
+    rangeLabel = `Store hours ${clockLabel(storeOpening(day))} – ${clockLabel(storeClosing(day))}, ${shortDate(day, true)}`;
     unit = 'hour';
   } else if (timeRange === 'weekly') {
     const thisWeek = weekStartSunday(now);
@@ -539,6 +567,17 @@ export function buildBreakdownSlots(
     }
     rangeLabel = `${year - 4} – ${year}`;
     unit = 'year';
+  } else if (window.days <= HOURLY_MAX_DAYS) {
+    // Short custom ranges (1-3 days): store hours of each day, hour by hour.
+    const multiDay = window.days > 1;
+    for (let day = startOfDay(window.start); day <= window.now; day = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1)) {
+      addStoreHoursDay(day, multiDay);
+    }
+    const firstDay = startOfDay(window.start);
+    rangeLabel = `Store hours ${clockLabel(storeOpening(firstDay))} – ${clockLabel(storeClosing(firstDay))}, ${
+      multiDay ? `${shortDate(firstDay)} – ${shortDate(window.now, true)}` : shortDate(firstDay, true)
+    }`;
+    unit = 'hour';
   } else {
     const days = window.days;
     if (days <= 92) {
@@ -654,24 +693,26 @@ export function ReportsAnalytics() {
   const filteredSalesTrends = useMemo(() => {
     const { end, mode, start } = salesTrendFrame(timeRange, customStartDate, customEndDate);
     const grouped = new Map<string, { sales: number; revenue: number; customers: Set<string>; firstDate: Date }>();
-    let cursor = bucketStartForDate(start, mode);
+    const seed = (bucket: Date) =>
+      grouped.set(String(bucket.getTime()), { sales: 0, revenue: 0, customers: new Set<string>(), firstDate: bucket });
 
-    while (cursor <= end) {
-      const bucket = new Date(cursor);
-      grouped.set(String(bucket.getTime()), {
-        sales: 0,
-        revenue: 0,
-        customers: new Set<string>(),
-        firstDate: bucket,
-      });
-      cursor = nextBucketStart(cursor, mode);
+    if (mode === 'hourly') {
+      // Store hours of each day only, so nights do not plot as zero sales.
+      storeHourSlots(start, end).forEach((slot) => seed(slot.start));
+    } else {
+      for (let cursor = bucketStartForDate(start, mode); cursor <= end; cursor = nextBucketStart(cursor, mode)) {
+        seed(new Date(cursor));
+      }
     }
+    const multiDay = startOfDay(start).getTime() !== startOfDay(end).getTime();
 
     salesRows.forEach((sale) => {
       const date = saleDate(sale);
       if (!date || date < start || date > end) return;
       const bucket = bucketStartForDate(date, mode);
       const key = String(bucket.getTime());
+      // Hourly charts cover store hours only; off-hours sales are listed in the Sales Breakdown.
+      if (mode === 'hourly' && !grouped.has(key)) return;
       const prev = grouped.get(key) ?? { sales: 0, revenue: 0, customers: new Set<string>(), firstDate: bucket };
       const details = Array.isArray(sale.sales_details) ? sale.sales_details : [];
       details.forEach((detail: any) => {
@@ -685,7 +726,9 @@ export function ReportsAnalytics() {
     return Array.from(grouped.entries())
       .map(([, agg], idx) => ({
         id: `flt-${idx}`,
-        date: trendBucketLabel(agg.firstDate, mode),
+        date: mode === 'hourly' && multiDay
+          ? `${agg.firstDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · ${clockLabel(agg.firstDate)}`
+          : trendBucketLabel(agg.firstDate, mode),
         sortDate: agg.firstDate.getTime(),
         sales: Math.round(agg.sales),
         revenue: Math.round(agg.revenue),
@@ -3061,6 +3104,8 @@ export function ReportsAnalytics() {
             const peak = points.reduce<(typeof points)[number] | null>((best, row) => (!best || valueOf(row) > valueOf(best) ? row : best), null);
             const emptyBuckets = points.filter((row) => row.revenue === 0 && row.sales === 0).length;
             const showDots = points.length <= 31;
+            // Multi-day hourly charts: mark where each new day's store hours begin.
+            const dayStarts = bucketMode === 'hourly' ? points.filter((row, index) => index > 0 && row.date.includes(' · ') && row.date.split(' · ')[0] !== points[index - 1].date.split(' · ')[0]) : [];
             // Axis/label amounts: ₱200K, ₱28.5K (no trailing ".0").
             const shortAmount = (value: number) =>
               isRevenue ? moneyCompact(value).replace('PHP ', '₱').replace('.0K', 'K').replace('.0M', 'M') : Math.round(value).toLocaleString();
@@ -3161,6 +3206,9 @@ export function ReportsAnalytics() {
                         ticks={yTicks}
                         width={56}
                       />
+                      {dayStarts.map((row) => (
+                        <ReferenceLine key={`day-${row.id}`} x={row.date} stroke="#3a3a46" strokeDasharray="2 4" />
+                      ))}
                       <Tooltip content={<TrendTooltip />} cursor={{ stroke: '#facc15', strokeWidth: 1, strokeDasharray: '4 4', opacity: 0.4 }} />
                       {average > 0 && (
                         <ReferenceLine
