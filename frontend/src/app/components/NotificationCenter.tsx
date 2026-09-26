@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Bell, X, AlertTriangle, Calendar, Package, TrendingUp, Info, Mail } from "lucide-react";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
@@ -9,6 +9,7 @@ import { isPromotionLive, promotionBoundaryMs, promotionDisplayName } from "../.
 import { shortId } from "./ui/utils";
 import {
   loadNotificationState,
+  rememberNotificationStateInTab,
   restoreDismissedNotifications,
   saveNotificationState,
 } from "../../lib/notification-state";
@@ -60,6 +61,9 @@ function stockVariantLabel(product: any) {
   return `${brand ? `${brand} ` : ""}${name}${variantText}${skuText}`;
 }
 
+/** How often read/dismissed state is re-read, for changes made on other devices. */
+const STATE_POLL_MS = 10_000;
+
 function formatTimestamp(date: Date) {
   const diff = Date.now() - date.getTime();
   const minutes = Math.max(0, Math.floor(diff / 60000));
@@ -105,22 +109,71 @@ export function NotificationCenter() {
   const [, setTick] = useState(0);
 
   // Read / dismissed state is saved per user in the database, so it survives
-  // reloads, closing the tab and other devices.
+  // reloads, closing the tab and other devices. Other open tabs get changes
+  // instantly (BroadcastChannel); other devices within STATE_POLL_MS.
+  const lastLocalChange = useRef(0);
+  const channel = useRef<BroadcastChannel | null>(null);
+
+  const refreshState = useCallback(async () => {
+    if (!userId) return;
+    const started = Date.now();
+    const state = await loadNotificationState(userId);
+    // Don't overwrite a click made while this request was in flight.
+    if (lastLocalChange.current >= started - 1500) return;
+    setReadIds(state.read);
+    setDismissedIds(state.dismissed);
+  }, [userId]);
+
   useEffect(() => {
-    let cancelled = false;
     setReadIds(new Set());
     setDismissedIds(new Set());
+    lastLocalChange.current = 0;
     if (!userId) return;
-    loadNotificationState(userId).then((state) => {
-      if (cancelled) return;
-      // Keep anything clicked while the saved state was loading.
-      setReadIds((prev) => new Set([...state.read, ...prev]));
-      setDismissedIds((prev) => new Set([...state.dismissed, ...prev]));
-    });
-    return () => {
-      cancelled = true;
+    void refreshState();
+
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel("meryl_bell_state");
+      bc.onmessage = (event) => {
+        const data = event.data;
+        if (data?.userId !== userId) return;
+        lastLocalChange.current = Date.now();
+        const state = { read: new Set<string>(data.read), dismissed: new Set<string>(data.dismissed) };
+        rememberNotificationStateInTab(userId, state);
+        setReadIds(state.read);
+        setDismissedIds(state.dismissed);
+      };
+    } catch {
+      bc = null;
+    }
+    channel.current = bc;
+
+    const refreshIfVisible = () => {
+      if (document.visibilityState === "visible") void refreshState();
     };
-  }, [userId]);
+    const timer = window.setInterval(refreshIfVisible, STATE_POLL_MS);
+    window.addEventListener("focus", refreshIfVisible);
+    document.addEventListener("visibilitychange", refreshIfVisible);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshIfVisible);
+      document.removeEventListener("visibilitychange", refreshIfVisible);
+      bc?.close();
+      channel.current = null;
+    };
+  }, [refreshState, userId]);
+
+  /** Apply a change here, tell the other tabs, and save it. */
+  const applyLocal = (read: Set<string>, dismissed: Set<string>) => {
+    lastLocalChange.current = Date.now();
+    setReadIds(read);
+    setDismissedIds(dismissed);
+    try {
+      channel.current?.postMessage({ userId, read: Array.from(read), dismissed: Array.from(dismissed) });
+    } catch {
+      // Other tabs catch up on their next refresh.
+    }
+  };
   useEffect(() => {
     const timer = setInterval(() => setTick((tick) => tick + 1), 60000);
     return () => clearInterval(timer);
@@ -300,18 +353,18 @@ export function NotificationCenter() {
     const fresh = ids.filter((id) => !readIds.has(id));
     if (!fresh.length) return;
     const next = new Set([...readIds, ...fresh]);
-    setReadIds(next);
+    applyLocal(next, dismissedIds);
     if (userId) void saveNotificationState(userId, fresh, { read: true }, { read: next, dismissed: dismissedIds });
   };
   const markAsRead = (id: string) => markRead([id]);
   const markAllAsRead = () => markRead(notifications.map((n) => n.id));
   const dismiss = (id: string) => {
     const next = new Set(dismissedIds).add(id);
-    setDismissedIds(next);
+    applyLocal(readIds, next);
     if (userId) void saveNotificationState(userId, [id], { dismissed: true }, { read: readIds, dismissed: next });
   };
   const restoreDismissed = () => {
-    setDismissedIds(new Set());
+    applyLocal(readIds, new Set());
     if (userId) void restoreDismissedNotifications(userId, { read: readIds, dismissed: new Set() });
   };
 

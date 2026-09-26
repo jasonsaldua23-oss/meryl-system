@@ -32,6 +32,11 @@ function readSession(userId: string): NotificationState {
   }
 }
 
+/** Keep a copy in this tab (used until the notification_state table exists). */
+export function rememberNotificationStateInTab(userId: string, state: NotificationState) {
+  writeSession(userId, state);
+}
+
 function writeSession(userId: string, state: NotificationState) {
   try {
     sessionStorage.setItem(
