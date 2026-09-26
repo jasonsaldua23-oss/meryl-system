@@ -1314,6 +1314,16 @@ export function ReportsAnalytics() {
       };
     };
 
+    // Daily report lists every day in the range, including days without sales
+    // (up to a year, so very long custom ranges stay readable).
+    const rangeDays = Math.round((startOfDay(now).getTime() - startOfDay(start).getTime()) / 86400000) + 1;
+    if (salesBreakdownPeriod === 'daily' && rangeDays <= 366) {
+      for (let day = startOfDay(start); day <= now; day.setDate(day.getDate() + 1)) {
+        const period = getBreakdownKey(new Date(day));
+        grouped.set(period.key, { label: period.label, date: period.date, pairs: 0, gross: 0, discount: 0, net: 0 });
+      }
+    }
+
     salesRows.forEach((sale) => {
       const date = saleDate(sale);
       if (!date || date < start || date > now) return;
@@ -1344,6 +1354,7 @@ export function ReportsAnalytics() {
         gross: row.gross,
         discount: row.discount,
         net: row.net,
+        hasSales: row.pairs > 0 || row.net > 0,
       }));
   }, [customEndDate, customStartDate, salesBreakdownPeriod, salesRows, timeRange]);
 
@@ -2839,15 +2850,28 @@ export function ReportsAnalytics() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {salesBreakdownRows.map((row) => (
-                    <TableRow key={row.id} className="border-[#24242d] bg-[#07070a] hover:bg-white/[0.03]">
-                      <TableCell className="text-yellow-200">{row.date}</TableCell>
-                      <TableCell className="text-yellow-200 text-center">{row.pairs}</TableCell>
-                      <TableCell className="text-yellow-200 text-center">{money(row.gross)}</TableCell>
-                      <TableCell className="text-yellow-200 text-center">{money(row.discount)}</TableCell>
-                      <TableCell className="text-yellow-300 text-center">{money(row.net)}</TableCell>
-                    </TableRow>
-                  ))}
+                  {salesBreakdownRows.map((row) =>
+                    row.hasSales ? (
+                      <TableRow key={row.id} className="border-[#24242d] bg-[#07070a] hover:bg-white/[0.03]">
+                        <TableCell className="text-yellow-200">{row.date}</TableCell>
+                        <TableCell className="text-yellow-200 text-center">{row.pairs}</TableCell>
+                        <TableCell className="text-yellow-200 text-center">{money(row.gross)}</TableCell>
+                        <TableCell className="text-yellow-200 text-center">{money(row.discount)}</TableCell>
+                        <TableCell className="text-yellow-300 text-center">{money(row.net)}</TableCell>
+                      </TableRow>
+                    ) : (
+                      <TableRow key={row.id} className="border-[#24242d] bg-[#07070a] hover:bg-white/[0.02]">
+                        <TableCell className="text-white/40">
+                          {row.date}
+                          <span className="ml-2 rounded border border-white/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-white/40">No sales</span>
+                        </TableCell>
+                        <TableCell className="text-white/30 text-center">0</TableCell>
+                        <TableCell className="text-white/30 text-center">{money(0)}</TableCell>
+                        <TableCell className="text-white/30 text-center">{money(0)}</TableCell>
+                        <TableCell className="text-white/30 text-center">{money(0)}</TableCell>
+                      </TableRow>
+                    ),
+                  )}
                   {!salesBreakdownRows.length && (
                     <TableRow className="border-[#24242d] bg-[#07070a]">
                       <TableCell colSpan={5} className="text-center text-yellow-200 py-6">No completed sales found for this date range.</TableCell>
