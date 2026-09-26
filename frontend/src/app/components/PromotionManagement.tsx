@@ -58,7 +58,18 @@ type PromotionRecommendation = {
   discount_type: Promotion['discount_type'];
   discount_value: number;
   targetProducts: string;
+  /** Suggested target sales goal (PHP, 7-day campaign) and how it was worked out. */
+  targetSalesGoal: number;
+  goalBasis: string;
 };
+
+/** Suggested recommendation length; goals are sized for this window. */
+const RECOMMENDATION_DAYS = 7;
+
+/** Round a goal to a tidy amount (nearest PHP 500, at least PHP 1,000). */
+function roundGoal(amount: number) {
+  return Math.max(1000, Math.round(amount / 500) * 500);
+}
 
 type PromotionMarginProduct = {
   id: string;
@@ -738,12 +749,14 @@ export function PromotionManagement() {
     const soldByProduct = new Map<string, number>();
     // Last completed sale per product, for holding duration (Use Case 8 Scenario 3).
     const lastSoldByProduct = new Map<string, number>();
+    let storeRevenue30 = 0;
     sales.forEach((sale: any) => {
       const txTime = saleTimestampMs(sale.transaction_date ?? sale.created_at);
       if (Number.isNaN(txTime)) return;
       const payment = Array.isArray(sale.payment) ? sale.payment[0] : sale.payment;
       const status = String(payment?.payment_status ?? '').toLowerCase();
       if (status !== 'completed' && status !== 'paid') return;
+      if (txTime >= last30.getTime()) storeRevenue30 += Number(sale.total_amount ?? 0);
       const details = Array.isArray(sale.sales_details) ? sale.sales_details : [];
       details.forEach((d: any) => {
         const pid = String(d.product_id ?? '');
@@ -813,6 +826,18 @@ export function PromotionManagement() {
       .map(([category, v]) => ({ category, ratio: v.stock > 0 ? v.sold / v.stock : 0 }))
       .sort((a, b) => a.ratio - b.ratio)[0];
 
+    // Target sales goals (Table 29 target_sales_goal) come from the store's own
+    // numbers: recent selling pace, stock on hand and the discounted price.
+    const avgPrice = (variants: typeof rows) => {
+      const priced = variants.filter((v) => v.srp > 0);
+      return priced.length ? priced.reduce((sum, v) => sum + v.srp, 0) / priced.length : 0;
+    };
+    const weeklyRevenue = (variants: typeof rows) =>
+      (variants.reduce((sum, v) => sum + v.srp * v.sold30, 0) / 30) * RECOMMENDATION_DAYS;
+    const afterDiscount = (amount: number, percent: number) => amount * (1 - percent / 100);
+    const peso = (amount: number) => `₱${Math.round(amount).toLocaleString()}`;
+    const LIFT = 1.2; // aim for 20% above the usual pace while the promotion runs
+
     const recs: PromotionRecommendation[] = [];
     if (slow) {
       const isDead = slow.holdingDays >= 60;
@@ -823,6 +848,15 @@ export function PromotionManagement() {
         discount_type: 'Percentage',
         discount_value: safeFor(slow, isDead ? 20 : 15),
         targetProducts: `Products: ${slow.name}`,
+        ...(() => {
+          const discount = safeFor(slow, isDead ? 20 : 15);
+          const pairs = Math.min(slow.stock, Math.max(2, Math.ceil(slow.stock * 0.25)));
+          const price = afterDiscount(avgPrice(slow.variants), discount);
+          return {
+            targetSalesGoal: roundGoal(pairs * price),
+            goalBasis: `Sell ${pairs} of the ${slow.stock} idle pairs at about ${peso(price)} each`,
+          };
+        })(),
       });
     }
     if (slow && fast) {
@@ -834,6 +868,16 @@ export function PromotionManagement() {
         discount_type: 'Bundle',
         discount_value: Math.max(5, Math.min(safeFor(slow, 10), safeFor(fast, 10))),
         targetProducts: `Products: ${slow.name}, ${fast.name}`,
+        ...(() => {
+          const discount = Math.max(5, Math.min(safeFor(slow, 10), safeFor(fast, 10)));
+          // About half of the best seller's usual weekly buyers take the bundle.
+          const bundles = Math.max(2, Math.ceil(((fast.sold30 / 30) * RECOMMENDATION_DAYS) / 2));
+          const bundlePrice = afterDiscount(avgPrice(slow.variants) + avgPrice(fast.variants), discount);
+          return {
+            targetSalesGoal: roundGoal(bundles * bundlePrice),
+            goalBasis: `${bundles} bundles at about ${peso(bundlePrice)} each (half of ${fast.name}'s usual weekly sales)`,
+          };
+        })(),
       });
     }
     if (weakCategory) {
@@ -848,6 +892,20 @@ export function PromotionManagement() {
         discount_type: 'Percentage',
         discount_value: safeCategoryDiscount,
         targetProducts: `Categories: ${weakCategory.category}`,
+        ...(() => {
+          const pace = weeklyRevenue(categoryProducts);
+          if (pace > 0) {
+            return {
+              targetSalesGoal: roundGoal(afterDiscount(pace * LIFT, safeCategoryDiscount)),
+              goalBasis: `Usual pace ${peso(pace)} a week, +20% during the promotion`,
+            };
+          }
+          const price = afterDiscount(avgPrice(categoryProducts), safeCategoryDiscount);
+          return {
+            targetSalesGoal: roundGoal(3 * price),
+            goalBasis: `No recent sales; aim for 3 pairs at about ${peso(price)} each`,
+          };
+        })(),
       });
     }
     const sellableRows = rows.filter((row) => row.srp > 0 && row.unitCost > 0);
@@ -861,6 +919,19 @@ export function PromotionManagement() {
       discount_type: 'Percentage',
       discount_value: safeAllProductsDiscount,
       targetProducts: 'All Products',
+      ...(() => {
+        const pace = (storeRevenue30 / 30) * RECOMMENDATION_DAYS;
+        if (pace > 0) {
+          return {
+            targetSalesGoal: roundGoal(pace * LIFT),
+            goalBasis: `Store's usual ${peso(pace)} a week (last 30 days), +20%`,
+          };
+        }
+        return {
+          targetSalesGoal: roundGoal(5 * afterDiscount(avgPrice(sellableRows), safeAllProductsDiscount)),
+          goalBasis: 'No sales in the last 30 days; aim for 5 pairs',
+        };
+      })(),
     });
     return recs.slice(0, 4);
   }, [productsQuery.data, salesQuery.data]);
@@ -920,12 +991,12 @@ export function PromotionManagement() {
   const applyRecommendation = (rec: PromotionRecommendation) => {
     const start = new Date();
     const end = new Date();
-    end.setDate(start.getDate() + 7);
+    end.setDate(start.getDate() + RECOMMENDATION_DAYS);
     setFormData({
       promo_name: rec.title,
       discount_type: rec.discount_type,
       discount_value: rec.discount_value,
-      targetSalesGoal: formData.targetSalesGoal || 10000,
+      targetSalesGoal: rec.targetSalesGoal,
       targetProducts: rec.targetProducts,
       start_date: toLocalDateTimeInput(start),
       end_date: toLocalDateTimeInput(end),
@@ -1470,7 +1541,11 @@ export function PromotionManagement() {
                               ? 'Buy 1 Get 1'
                               : 'Bundle'}
                       </Badge>
+                      <Badge className="bg-[#242432] text-emerald-300 border border-zinc-700 font-semibold" title={rec.goalBasis}>
+                        Goal ₱{rec.targetSalesGoal.toLocaleString()}
+                      </Badge>
                     </div>
+                    <p className="mt-1.5 text-[11px] text-zinc-500">Goal: {rec.goalBasis}</p>
                   </div>
                   <Button
                     size="sm"
