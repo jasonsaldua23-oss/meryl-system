@@ -15,6 +15,7 @@ import { supabase } from "../../lib/supabase";
 import { logAuditEvent } from "../../lib/api/audit-logger";
 import { cleanProductImageUrl, getWebpageUrlWarning } from "../../lib/image-utils";
 import { TablePagination } from "./ui/table-pagination";
+import { storeToday } from "../../lib/datetime";
 
 type InventoryStatus = "Active" | "Inactive";
 type ProductTab = "list" | "settings" | "inventory";
@@ -125,8 +126,7 @@ function getProductStatusMeta(product?: UiProduct) {
 function isExpiredProduct(product?: Pick<UiProduct, "expiration_date">) {
   const expirationDate = String(product?.expiration_date ?? "").slice(0, 10);
   if (!expirationDate) return false;
-  const today = new Date().toISOString().slice(0, 10);
-  return expirationDate < today;
+  return expirationDate < storeToday();
 }
 
 function stockCondition(stock: number, reorder: number, expired = false) {
@@ -1304,39 +1304,123 @@ function InventoryTable({ products, onConfigure }: { products: UiProduct[]; onCo
           <DialogHeader>
             <DialogTitle className="text-yellow-300">Inventory Details</DialogTitle>
           </DialogHeader>
-          {selectedProduct && (
-            <div className="space-y-4">
-              <div className="flex items-center gap-3.5 rounded-xl border border-[#2d2d40] bg-[#1a1a27] p-3.5">
-                <ProductThumbnail
-                  src={selectedProduct.image_url}
-                  alt={selectedProduct.name}
-                  className="w-14 h-14 rounded-xl"
-                  iconSize="w-6 h-6"
-                />
-                <div>
-                  <p className="text-base font-bold text-white">{selectedProduct.brand} - {selectedProduct.name}</p>
-                  <p className="text-xs text-yellow-200/70 mt-0.5">{selectedProduct.category} &bull; {variantLabel(selectedProduct)}</p>
-                </div>
-              </div>
+          {selectedProduct && (() => {
+            const condition = stockCondition(
+              selectedProduct.available_stock,
+              selectedProduct.reorder_level,
+              isExpiredProduct(selectedProduct),
+            );
+            const isActive = String(selectedProduct.status ?? "").toLowerCase() === "active";
+            const variantChips = [
+              selectedProduct.category,
+              selectedProduct.color,
+              selectedProduct.gender,
+              selectedProduct.size ? `Size ${selectedProduct.size}` : "",
+            ]
+              .map((value) => String(value ?? "").trim())
+              .filter((value) => value && !["n/a", "default"].includes(value.toLowerCase()));
+            const manufactured = String(selectedProduct.manufacturer_date ?? "").slice(0, 10);
+            const expires = String(selectedProduct.expiration_date ?? "").slice(0, 10);
+            const onHand = Math.max(1, Number(selectedProduct.stock) || 0);
+            const availablePct = Math.min(100, Math.round((Number(selectedProduct.available_stock) / onHand) * 100));
 
-              <div className="grid gap-3 text-sm md:grid-cols-2">
-                <DetailPill label="SKU" value={shortId(selectedProduct.sku, 12, 8)} />
-                <DetailPill label="Product" value={selectedProduct.name} />
-                <DetailPill label="Brand" value={selectedProduct.brand} />
-                <DetailPill label="Category" value={selectedProduct.category} />
-                <DetailPill label="Variant" value={variantLabel(selectedProduct)} />
-                <DetailPill label="Price" value={formatMoney(selectedProduct.srp)} />
-                <DetailPill label="On Hand" value={`${selectedProduct.stock} units`} />
-                <DetailPill label="Held" value={`${selectedProduct.reserved_stock} units`} />
-                <DetailPill label="Available" value={`${selectedProduct.available_stock} units`} />
-                <DetailPill label="Reorder" value={`${selectedProduct.reorder_level}`} />
-                <DetailPill label="Status" value={selectedProduct.status} />
-                <DetailPill label="Condition" value={stockCondition(selectedProduct.available_stock, selectedProduct.reorder_level, isExpiredProduct(selectedProduct)).label} />
-                <DetailPill label="Manufacturer Date" value={selectedProduct.manufacturer_date ? selectedProduct.manufacturer_date.slice(0, 10) : "N/A"} />
-                <DetailPill label="Expiration Date" value={selectedProduct.expiration_date ? selectedProduct.expiration_date.slice(0, 10) : "N/A"} />
+            return (
+              <div className="space-y-4">
+                {/* Identity: what it is, what it costs, whether it can be sold */}
+                <div className="flex gap-4 rounded-xl border border-[#2d2d40] bg-[#1a1a27] p-4">
+                  <ProductThumbnail
+                    src={selectedProduct.image_url}
+                    alt={selectedProduct.name}
+                    className="w-20 h-20 rounded-xl shrink-0"
+                    iconSize="w-7 h-7"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-yellow-300/70">{selectedProduct.brand}</p>
+                    <p className="truncate text-lg font-bold leading-tight text-white">{selectedProduct.name}</p>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {variantChips.map((chip) => (
+                        <span key={chip} className="rounded-md border border-[#34344a] bg-[#222232] px-2 py-0.5 text-[11px] text-zinc-300">
+                          {chip}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <p className="text-xl font-bold text-yellow-300">{formatMoney(selectedProduct.srp)}</p>
+                    <div className="mt-2 flex flex-col items-end gap-1">
+                      <Badge className={isActive ? "bg-emerald-600/20 text-emerald-300 border-emerald-500/30" : "bg-zinc-700 text-zinc-300"}>
+                        {selectedProduct.status}
+                      </Badge>
+                      <Badge className={condition.className}>{condition.label}</Badge>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Stock at a glance */}
+                <div className="rounded-xl border border-[#2d2d40] bg-[#1a1a27] p-4">
+                  <div className="flex items-end justify-between">
+                    <div>
+                      <p className="text-[11px] uppercase tracking-wider text-zinc-400">Available to sell</p>
+                      <p className="text-3xl font-bold leading-none text-white">
+                        {selectedProduct.available_stock}
+                        <span className="ml-1 text-sm font-medium text-zinc-400">units</span>
+                      </p>
+                    </div>
+                    <div className="flex gap-5 text-right text-xs">
+                      <div>
+                        <p className="text-zinc-400">On hand</p>
+                        <p className="text-base font-semibold text-zinc-100">{selectedProduct.stock}</p>
+                      </div>
+                      <div>
+                        <p className="text-zinc-400">Held</p>
+                        <p className="text-base font-semibold text-zinc-100">{selectedProduct.reserved_stock}</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-[#2a2a3a]">
+                    <div className="h-full rounded-full bg-yellow-400" style={{ width: `${availablePct}%` }} />
+                  </div>
+                  <p className="mt-2 text-[11px] text-zinc-400">
+                    Reorder when available stock reaches <span className="font-semibold text-zinc-200">{selectedProduct.reorder_level}</span> units
+                  </p>
+                </div>
+
+                {/* Record details: only what exists */}
+                <dl className="divide-y divide-[#2a2a3a] rounded-xl border border-[#2d2d40] bg-[#1a1a27] px-4 text-sm">
+                  <div className="flex items-center justify-between gap-3 py-2.5">
+                    <dt className="text-zinc-400">SKU</dt>
+                    <dd className="flex items-center gap-2 font-mono text-xs text-zinc-200">
+                      <span title={selectedProduct.sku}>{shortId(selectedProduct.sku, 8, 4)}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard?.writeText(String(selectedProduct.sku ?? "")).then(
+                            () => toast.success("SKU copied"),
+                            () => toast.error("Could not copy SKU"),
+                          );
+                        }}
+                        className="rounded border border-[#34344a] px-1.5 py-0.5 font-sans text-[10px] text-yellow-300 hover:bg-[#262636]"
+                      >
+                        Copy
+                      </button>
+                    </dd>
+                  </div>
+                  {manufactured && (
+                    <div className="flex items-center justify-between gap-3 py-2.5">
+                      <dt className="text-zinc-400">Manufactured</dt>
+                      <dd className="text-zinc-200">{manufactured}</dd>
+                    </div>
+                  )}
+                  {expires && (
+                    <div className="flex items-center justify-between gap-3 py-2.5">
+                      <dt className="text-zinc-400">Expires</dt>
+                      <dd className={isExpiredProduct(selectedProduct) ? "font-semibold text-red-400" : "text-zinc-200"}>{expires}</dd>
+                    </div>
+                  )}
+                </dl>
               </div>
-            </div>
-          )}
+            );
+          })()}
         </DialogContent>
       </Dialog>
     </div>
