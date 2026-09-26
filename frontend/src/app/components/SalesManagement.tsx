@@ -1052,38 +1052,41 @@ export function SalesManagement() {
                                 {sale.replacementDetails.length > 0 && (
                                   <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
                                     <p className="mb-3 text-xs uppercase tracking-wider text-zinc-400 font-semibold">Replacement Items</p>
-                                    <div className="space-y-3">
-                                      {sale.replacementDetails.map((detail: any) => (
-                                        <div key={detail.return_detail_id} className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
-                                          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 md:items-stretch">
-                                            <div className="rounded-md border border-red-900/50 bg-red-950/20 p-3">
-                                              <p className="mb-2 text-xs uppercase tracking-wide text-zinc-400">Replaced Item</p>
-                                              <p className="font-medium text-zinc-100">{detail.returnedProductName}</p>
-                                              <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-zinc-300">
-                                                <span>Qty: {detail.returnedQuantity}</span>
-                                                <span>Size: {detail.returnedSize}</span>
-                                                <span>Color: {detail.returnedColor}</span>
+                                    <div className="space-y-2">
+                                      {sale.replacementDetails.map((detail: any) => {
+                                        const sizeChanged = detail.returnedSize !== detail.replacementSize;
+                                        const colorChanged = detail.returnedColor !== detail.replacementColor;
+                                        return (
+                                          <div key={detail.return_detail_id} className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
+                                            <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+                                              <div className="min-w-0">
+                                                <p className="text-[10px] font-semibold uppercase tracking-wider text-red-300/80">Returned</p>
+                                                <p className="truncate font-semibold text-zinc-100">{detail.returnedProductName}</p>
+                                                <p className="text-xs text-zinc-400">
+                                                  {detail.returnedColor} · Size {detail.returnedSize} · Qty {detail.returnedQuantity}
+                                                </p>
+                                              </div>
+                                              <span className="text-zinc-500">→</span>
+                                              <div className="min-w-0">
+                                                <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300/80">Given</p>
+                                                <p className="truncate font-semibold text-zinc-100">{detail.replacementProductName}</p>
+                                                <p className="text-xs text-zinc-400">
+                                                  <span className={colorChanged ? "font-semibold text-yellow-300" : ""}>{detail.replacementColor}</span>
+                                                  {" · "}
+                                                  <span className={sizeChanged ? "font-semibold text-yellow-300" : ""}>Size {detail.replacementSize}</span>
+                                                  {" · "}Qty {detail.replacementQuantity}
+                                                </p>
                                               </div>
                                             </div>
-                                            <div className="rounded-md border border-emerald-900/50 bg-emerald-950/20 p-3">
-                                              <p className="mb-2 text-xs uppercase tracking-wide text-zinc-400">Replacement Item</p>
-                                              <p className="font-medium text-zinc-100">{detail.replacementProductName}</p>
-                                              <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-zinc-300">
-                                                <span>Qty: {detail.replacementQuantity}</span>
-                                                <span>Size: {detail.replacementSize}</span>
-                                                <span>Color: {detail.replacementColor}</span>
-                                              </div>
+                                            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 border-t border-zinc-800 pt-2 text-xs text-zinc-400">
+                                              {detail.customerReason && (
+                                                <span>Reason: <span className="text-zinc-200">{detail.customerReason}</span></span>
+                                              )}
+                                              <span>Returned item: <span className="text-zinc-200">{detail.inventoryAction}</span></span>
                                             </div>
                                           </div>
-                                          <div className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-300">
-                                            <Badge className="bg-emerald-500/20 text-emerald-300 border-emerald-500/30">1:1 Even Exchange</Badge>
-                                            <Badge className="bg-zinc-800 text-zinc-200">Inventory: {detail.inventoryAction}</Badge>
-                                            {detail.customerReason && (
-                                              <Badge className="bg-zinc-800 text-zinc-200">Reason: {detail.customerReason}</Badge>
-                                            )}
-                                          </div>
-                                        </div>
-                                      ))}
+                                        );
+                                      })}
                                     </div>
                                   </div>
                                 )}
