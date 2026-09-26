@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { AlertTriangle, ArrowLeft, Loader2, ShieldCheck } from "lucide-react";
 import { Button } from "./ui/button";
-import { getPostLoginPath, getRoleGroup, useAuth, type AuthUser } from "../../lib/auth-context";
+import { getPostLoginPath, getRoleGroup, MERYL_TERMINAL_LOCKED_KEY, useAuth, type AuthUser } from "../../lib/auth-context";
 import { supabase } from "../../lib/supabase";
 
 const OTP_TTL_MS = 5 * 60 * 1000;
@@ -66,6 +66,8 @@ export function AuthCallback() {
         const provider = String(session?.user?.app_metadata?.provider ?? "").toLowerCase();
         const sessionEmail = String(session?.user?.email ?? "").trim().toLowerCase();
 
+        // Arriving here is a fresh Google/email sign-in: start unlocked.
+        sessionStorage.removeItem(MERYL_TERMINAL_LOCKED_KEY);
         const appUser = await completeExternalAuth({
           persist: provider !== "google",
           bypassOtpGate: provider === "google",
@@ -158,6 +160,7 @@ export function AuthCallback() {
       }
 
       setOtpChallenge(null);
+      sessionStorage.removeItem(MERYL_TERMINAL_LOCKED_KEY);
       const appUser = await completeExternalAuth({ persist: true, bypassOtpGate: true });
       if (!appUser) {
         throw new Error("Could not complete sign-in after OTP verification.");

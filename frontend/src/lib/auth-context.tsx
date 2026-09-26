@@ -534,7 +534,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           } else {
             revokeAppSession();
             clearStoredUser();
-            if (mounted) setUser(null);
+            sessionStorage.removeItem(MERYL_TERMINAL_LOCKED_KEY);
+            if (mounted) {
+              setIsLocked(false);
+              setUser(null);
+            }
           }
         }
         // On error (offline, or the database has not been migrated yet) keep
@@ -906,6 +910,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (options?.issueSession ?? true) {
             setAppSessionToken(payload.session_token ? String(payload.session_token) : null);
             syncBackendSession();
+            // A fresh sign-in starts unlocked, even if an earlier session in this
+            // tab expired while the terminal was locked.
+            sessionStorage.removeItem(MERYL_TERMINAL_LOCKED_KEY);
+            setIsLocked(false);
           }
           return authUser;
         }
@@ -926,10 +934,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Inactivity Auto-Lock Detector
   useEffect(() => {
-    if (!user) {
-      setIsLocked(false);
-      return;
-    }
+    // On reload the user is briefly null while the session is restored; the lock
+    // must survive that (logout clears it explicitly). Once the user is back,
+    // re-apply the lock saved for this tab.
+    if (!user) return;
+    setIsLocked(sessionStorage.getItem(MERYL_TERMINAL_LOCKED_KEY) === "true");
 
     let timeoutId: any;
 
