@@ -1,19 +1,33 @@
-import { useEffect, useMemo, useState } from "react";
-import { Bell, X, AlertTriangle, TrendingDown, Calendar, Package, TrendingUp, Info } from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Bell, X, AlertTriangle, Calendar, Package, TrendingUp, Info, Mail } from "lucide-react";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
-import { ScrollArea } from "./ui/scroll-area";
-import { useNotifications, useProducts, usePromotions, useReturns, useSales } from "../../lib/hooks";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./ui/dialog";
+import { useNotifications, useProducts, usePromotions, useSales } from "../../lib/hooks";
+import { useAuth } from "../../lib/auth-context";
+import { isPromotionLive, promotionBoundaryMs, promotionDisplayName } from "../../lib/promotion-rules";
 import { shortId } from "./ui/utils";
+
+type Category = "stock" | "sales" | "promotion" | "email";
 
 interface NotificationItem {
   id: string;
   type: "warning" | "info" | "critical" | "success";
+  category: Category;
   title: string;
   message: string;
   timestamp: Date;
-  icon: "stock" | "promotion" | "sales" | "trend" | "info";
 }
+
+const CATEGORY_LABELS: Record<Category, string> = {
+  stock: "Stock",
+  sales: "Sales",
+  promotion: "Promotions",
+  email: "Promotion emails",
+};
+
+/** Read / dismissed ids kept per user, so they survive a page reload. */
+const MAX_STORED_IDS = 500;
 
 function asDate(value: string | null | undefined) {
   if (!value) return null;
@@ -33,261 +47,338 @@ function compactParts(parts: Array<string | null | undefined>) {
     .filter((part) => part && part.toLowerCase() !== "n/a" && part.toLowerCase() !== "default");
 }
 
-function stockVariantLabel(product: any, inventory: any) {
+function stockVariantLabel(product: any) {
   const name = String(product?.product_name ?? "Unknown Product").trim();
   const brand = String(product?.brand ?? "").trim();
   const sku = String(product?.sku ?? product?.product_id ?? "").trim();
-  const variant = compactParts([
-    product?.color,
-    product?.gender,
-    product?.size ? `Size ${product.size}` : null,
-  ]);
+  const variant = compactParts([product?.color, product?.gender, product?.size ? `Size ${product.size}` : null]);
   const variantText = variant.length ? ` - ${variant.join(" / ")}` : "";
   const skuText = sku ? ` (${shortId(sku)})` : "";
   return `${brand ? `${brand} ` : ""}${name}${variantText}${skuText}`;
 }
 
+function loadIds(key: string) {
+  try {
+    const raw = localStorage.getItem(key);
+    const ids = raw ? JSON.parse(raw) : [];
+    return new Set<string>(Array.isArray(ids) ? ids.map(String) : []);
+  } catch {
+    return new Set<string>();
+  }
+}
+
+function saveIds(key: string, ids: Set<string>) {
+  try {
+    localStorage.setItem(key, JSON.stringify(Array.from(ids).slice(-MAX_STORED_IDS)));
+  } catch {
+    // Storage unavailable (private window): state lasts for this visit only.
+  }
+}
+
+function formatTimestamp(date: Date) {
+  const diff = Date.now() - date.getTime();
+  const minutes = Math.max(0, Math.floor(diff / 60000));
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+const ICONS: Record<Category, ReactNode> = {
+  stock: <Package className="w-4 h-4" />,
+  sales: <TrendingUp className="w-4 h-4" />,
+  promotion: <Calendar className="w-4 h-4" />,
+  email: <Mail className="w-4 h-4" />,
+};
+
+function typeColor(type: NotificationItem["type"]) {
+  switch (type) {
+    case "critical":
+      return "bg-red-900 text-yellow-200 border-red-800";
+    case "warning":
+      return "bg-red-800 text-yellow-200 border-red-700";
+    case "success":
+      return "bg-green-900 text-yellow-200 border-green-800";
+    default:
+      return "bg-red-700 text-yellow-200 border-red-600";
+  }
+}
+
 export function NotificationCenter() {
-  const READ_STORAGE_KEY = "meryl_notifications_read_ids";
-  const DISMISSED_STORAGE_KEY = "meryl_notifications_dismissed_ids";
+  const { user } = useAuth();
+  const storageSuffix = user?.user_id ?? "guest";
+  const readKey = `meryl_notifications_read:${storageSuffix}`;
+  const dismissedKey = `meryl_notifications_dismissed:${storageSuffix}`;
+
   const [isOpen, setIsOpen] = useState(false);
-  const [readIds, setReadIds] = useState<Set<string>>(new Set());
-  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+  const [showAll, setShowAll] = useState(false);
+  const [filter, setFilter] = useState<"all" | "unread" | Category>("all");
+  const [readIds, setReadIds] = useState<Set<string>>(() => loadIds(readKey));
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(() => loadIds(dismissedKey));
+  // Re-render every minute so "5m ago" stays current while the page is open.
+  const [, setTick] = useState(0);
+
+  // Which user's ids are loaded; never save one user's ids under another's key.
+  const [loadedFor, setLoadedFor] = useState(storageSuffix);
+  useEffect(() => {
+    setReadIds(loadIds(readKey));
+    setDismissedIds(loadIds(dismissedKey));
+    setLoadedFor(storageSuffix);
+  }, [readKey, dismissedKey, storageSuffix]);
+  useEffect(() => {
+    if (loadedFor === storageSuffix) saveIds(readKey, readIds);
+  }, [loadedFor, readKey, readIds, storageSuffix]);
+  useEffect(() => {
+    if (loadedFor === storageSuffix) saveIds(dismissedKey, dismissedIds);
+  }, [dismissedIds, dismissedKey, loadedFor, storageSuffix]);
+  useEffect(() => {
+    const timer = setInterval(() => setTick((tick) => tick + 1), 60000);
+    return () => clearInterval(timer);
+  }, []);
 
   const salesQuery = useSales();
   const productsQuery = useProducts();
   const promotionsQuery = usePromotions();
-  const returnsQuery = useReturns();
   const notificationsQuery = useNotifications();
 
   const sales = (salesQuery.data as any[]) ?? [];
   const products = (productsQuery.data as any[]) ?? [];
   const promotions = (promotionsQuery.data as any[]) ?? [];
-  const returnsList = (returnsQuery.data as any[]) ?? [];
-  const dbNotifications = (notificationsQuery.data as any[]) ?? [];
+  const emailRows = (notificationsQuery.data as any[]) ?? [];
 
-  const notifications = useMemo(() => {
+  const allNotifications = useMemo(() => {
     const now = new Date();
-    const generated: NotificationItem[] = [];
+    const items: NotificationItem[] = [];
 
+    // Low stock alerts (manuscript 1.7): variants at or below their reorder level.
     const lowStock = products
       .map((p) => {
         const inventory = Array.isArray(p.inventory) ? p.inventory[0] : p.inventory;
-        const stock = Number(inventory?.stock_quantity ?? 0);
-        const reorder = Number(p.reorder_level ?? inventory?.reorder_level ?? 10);
-        const productId = String(p.product_id ?? p.id ?? p.sku ?? p.product_name ?? "product");
-        const eventDate =
-          latestDate(
-            inventory?.last_updated,
-            inventory?.updated_at,
-            p.last_updated,
-            p.updated_at,
-            p.created_at,
-          ) ?? now;
         return {
-          productId,
-          label: stockVariantLabel(p, inventory),
-          stock,
-          reorder,
-          eventDate,
+          productId: String(p.product_id ?? p.id ?? p.sku ?? p.product_name ?? "product"),
+          label: stockVariantLabel(p),
+          stock: Number(inventory?.stock_quantity ?? 0),
+          reorder: Number(p.reorder_level ?? inventory?.reorder_level ?? 10),
+          status: String(p.status ?? "active").toLowerCase(),
+          eventDate: latestDate(inventory?.last_updated, inventory?.updated_at, p.updated_at, p.created_at) ?? now,
         };
       })
-      .filter((x) => x.stock <= x.reorder)
-      .sort((a, b) => {
-        const stockDiff = a.stock - b.stock;
-        if (stockDiff !== 0) return stockDiff;
-        return b.eventDate.getTime() - a.eventDate.getTime();
-      });
+      .filter((x) => (x.status === "active" || x.status === "available") && x.stock <= x.reorder);
 
-    const criticalStock = lowStock.filter((x) => x.stock <= Math.max(2, Math.floor(x.reorder * 0.4)));
-    if (criticalStock.length > 0) {
-      const top = criticalStock[0];
-      generated.push({
-        id: `stock-critical-${top.productId}-${top.stock}-${top.reorder}-${top.eventDate.getTime()}`,
-        type: "critical",
-        title: "Critical Stock Alert",
-        message: `${top.label} has only ${top.stock} units left and is below safe stock level.`,
-        timestamp: top.eventDate,
-        icon: "stock",
+    lowStock
+      .filter((x) => x.stock <= Math.max(2, Math.floor(x.reorder * 0.4)))
+      .sort((a, b) => a.stock - b.stock || b.eventDate.getTime() - a.eventDate.getTime())
+      .slice(0, 5)
+      .forEach((x) => {
+        items.push({
+          id: `stock-critical-${x.productId}-${x.stock}`,
+          type: "critical",
+          category: "stock",
+          title: x.stock === 0 ? "Out of Stock" : "Critical Stock Alert",
+          message:
+            x.stock === 0
+              ? `${x.label} is out of stock (reorder level ${x.reorder}).`
+              : `${x.label} has only ${x.stock} pair${x.stock === 1 ? "" : "s"} left (reorder level ${x.reorder}).`,
+          timestamp: x.eventDate,
+        });
       });
-    }
     if (lowStock.length > 0) {
       const latest = [...lowStock].sort((a, b) => b.eventDate.getTime() - a.eventDate.getTime())[0];
-      generated.push({
-        id: `stock-low-summary-${lowStock.length}-${latest.productId}-${latest.stock}-${latest.eventDate.getTime()}`,
+      items.push({
+        id: `stock-low-summary-${lowStock.length}-${latest.productId}-${latest.stock}`,
         type: "warning",
+        category: "stock",
         title: "Low Stock Warning",
-        message: `${lowStock.length} variants are at or below reorder level. Latest: ${latest.label} (${latest.stock}/${latest.reorder} units).`,
+        message: `${lowStock.length} variant${lowStock.length === 1 ? " is" : "s are"} at or below reorder level. Latest: ${latest.label} (${latest.stock}/${latest.reorder}).`,
         timestamp: latest.eventDate,
-        icon: "stock",
       });
     }
 
-    const pendingSales = sales.filter((s) => {
-      const payment = Array.isArray((s as any).payment) ? (s as any).payment[0] : (s as any).payment;
-      const status = String(payment?.payment_status ?? "").toLowerCase();
-      return status === "pending";
-    }).length;
-    if (pendingSales > 0) {
-      generated.push({
-        id: "sales-pending",
-        type: "info",
-        title: "Pending Sales",
-        message: `${pendingSales} sale records are currently pending payment.`,
-        timestamp: new Date(now.getTime() - 20 * 60000),
-        icon: "sales",
-      });
-    }
-
-    const recentCompletedSales = sales.filter((s) => {
-      const payment = Array.isArray((s as any).payment) ? (s as any).payment[0] : (s as any).payment;
-      const status = String(payment?.payment_status ?? "").toLowerCase();
-      const date = asDate(s.transaction_date ?? s.created_at);
-      return status === "completed" && date && now.getTime() - date.getTime() <= 24 * 60 * 60000;
-    });
-    if (recentCompletedSales.length >= 5) {
-      generated.push({
-        id: "sales-high-24h",
+    // Busy day: 5+ completed sales in the last 24 hours.
+    const recentSales = sales
+      .map((s) => ({
+        date: asDate(s.transaction_date ?? s.created_at),
+        status: String((Array.isArray(s.payment) ? s.payment[0] : s.payment)?.payment_status ?? "completed").toLowerCase(),
+      }))
+      .filter((s) => s.date && s.status === "completed" && now.getTime() - s.date.getTime() <= 24 * 3600000)
+      .sort((a, b) => b.date!.getTime() - a.date!.getTime());
+    if (recentSales.length >= 5) {
+      items.push({
+        id: `sales-high-${recentSales[0].date!.toISOString().slice(0, 10)}`,
         type: "success",
+        category: "sales",
         title: "High Sales Activity",
-        message: `${recentCompletedSales.length} completed sales were recorded in the last 24 hours.`,
-        timestamp: new Date(now.getTime() - 30 * 60000),
-        icon: "trend",
+        message: `${recentSales.length} completed sales in the last 24 hours.`,
+        timestamp: recentSales[0].date!,
       });
     }
 
-    const activePromotions = promotions.filter((p) => String(p.status ?? "").toLowerCase() === "active");
-    const endingSoon = activePromotions.filter((p) => {
-      const end = asDate(p.end_date);
-      if (!end) return false;
-      const diff = end.getTime() - now.getTime();
-      return diff > 0 && diff <= 2 * 24 * 60 * 60000;
+    // Promotions starting now or ending within 48 hours.
+    promotions.forEach((promo) => {
+      const name = promotionDisplayName(promo);
+      const id = String(promo.promo_id ?? name);
+      if (!isPromotionLive(promo, now.getTime())) return;
+      const start = promotionBoundaryMs(promo.start_date, "start");
+      const end = promotionBoundaryMs(promo.end_date, "end");
+      if (Number.isFinite(start) && now.getTime() - start <= 24 * 3600000) {
+        items.push({
+          id: `promo-live-${id}`,
+          type: "info",
+          category: "promotion",
+          title: "Promotion Now Live",
+          message: `${name} is running at the POS.`,
+          timestamp: new Date(start),
+        });
+      }
+      if (Number.isFinite(end) && end - now.getTime() <= 48 * 3600000) {
+        const hoursLeft = Math.max(1, Math.round((end - now.getTime()) / 3600000));
+        items.push({
+          id: `promo-ending-${id}`,
+          type: "warning",
+          category: "promotion",
+          title: "Promotion Ending Soon",
+          message: `${name} ends in about ${hoursLeft} hour${hoursLeft === 1 ? "" : "s"}.`,
+          timestamp: new Date(Math.max(start || 0, end - 48 * 3600000)),
+        });
+      }
     });
-    if (endingSoon.length > 0) {
-      const promo = endingSoon[0];
-      generated.push({
-        id: `promo-ending-${promo.promotion_id ?? promo.promotion_name}`,
-        type: "warning",
-        title: "Promotion Ending Soon",
-        message: `${promo.promotion_name ?? "An active promotion"} ends within 48 hours.`,
-        timestamp: asDate(promo.updated_at ?? promo.created_at) ?? new Date(now.getTime() - 45 * 60000),
-        icon: "promotion",
-      });
-    }
 
-    const pendingReturns = returnsList.filter((r) => String(r.status ?? "").toLowerCase() === "pending").length;
-    if (pendingReturns > 0) {
-      generated.push({
-        id: "returns-pending",
-        type: "info",
-        title: "Pending Return Requests",
-        message: `${pendingReturns} return requests are waiting for review.`,
-        timestamp: new Date(now.getTime() - 60 * 60000),
-        icon: "info",
-      });
-    }
-
-    const fromDb: NotificationItem[] = dbNotifications.slice(0, 12).map((n: any) => {
-      const title = String(n.subject ?? n.title ?? "System Notification");
-      const message = String(n.message ?? n.content ?? "New update available.");
-      const rawType = String(n.notification_type ?? n.type ?? "info").toLowerCase();
-      const type: NotificationItem["type"] =
-        rawType.includes("critical")
-          ? "critical"
-          : rawType.includes("warn")
-            ? "warning"
-            : rawType.includes("success")
-              ? "success"
-              : "info";
-      return {
-        id: `db-${n.notification_id ?? title}`,
-        type,
-        title,
-        message,
-        timestamp: asDate(n.date_sent ?? n.created_at ?? n.updated_at) ?? now,
-        icon: type === "critical" || type === "warning" ? "stock" : "info",
+    // Promotion email results (Use Case 9, Scenario 2): one summary per campaign
+    // instead of one row per customer email.
+    const byPromo = new Map<string, { name: string; sent: number; failed: number; pending: number; latest: Date }>();
+    emailRows.forEach((row) => {
+      const promoId = String(row.promo_id ?? "");
+      if (!promoId) return;
+      const promo = Array.isArray(row.promotion) ? row.promotion[0] : row.promotion;
+      const entry = byPromo.get(promoId) ?? {
+        name: promo ? promotionDisplayName(promo) : "A promotion",
+        sent: 0,
+        failed: 0,
+        pending: 0,
+        latest: new Date(0),
       };
+      const status = String(row.email_status ?? "").toLowerCase();
+      if (status === "sent" || status === "delivered") entry.sent += 1;
+      else if (status === "failed" || status === "error" || status === "bounced") entry.failed += 1;
+      else entry.pending += 1;
+      const when = asDate(row.date_sent ?? row.created_at);
+      if (when && when > entry.latest) entry.latest = when;
+      byPromo.set(promoId, entry);
+    });
+    byPromo.forEach((entry, promoId) => {
+      if (entry.sent + entry.failed === 0) return; // nothing dispatched yet
+      const parts = [`${entry.sent} sent`];
+      if (entry.failed) parts.push(`${entry.failed} failed`);
+      if (entry.pending) parts.push(`${entry.pending} not sent yet`);
+      items.push({
+        id: `promo-email-${promoId}-${entry.sent}-${entry.failed}`,
+        type: entry.failed ? "warning" : "success",
+        category: "email",
+        title: entry.failed ? "Some Promotion Emails Failed" : "Promotion Emails Sent",
+        message: `${entry.name}: ${parts.join(", ")}.`,
+        timestamp: entry.latest.getTime() > 0 ? entry.latest : now,
+      });
     });
 
-    return [...generated, ...fromDb]
-      .filter((n) => !dismissedIds.has(n.id))
-      .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
-  }, [products, sales, promotions, returnsList, dbNotifications, dismissedIds]);
+    return items.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+  }, [products, sales, promotions, emailRows]);
 
+  const notifications = useMemo(
+    () => allNotifications.filter((n) => !dismissedIds.has(n.id)),
+    [allNotifications, dismissedIds],
+  );
   const unreadCount = notifications.filter((n) => !readIds.has(n.id)).length;
 
-  useEffect(() => {
-    try {
-      localStorage.removeItem(READ_STORAGE_KEY);
-      localStorage.removeItem(DISMISSED_STORAGE_KEY);
-    } catch {
-      // Ignore
-    }
-  }, []);
+  const filtered = useMemo(
+    () =>
+      notifications.filter((n) =>
+        filter === "all" ? true : filter === "unread" ? !readIds.has(n.id) : n.category === filter,
+      ),
+    [filter, notifications, readIds],
+  );
 
   useEffect(() => {
     if (!isOpen) return;
-
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setIsOpen(false);
-      }
+      if (event.key === "Escape") setIsOpen(false);
     };
-
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [isOpen]);
 
-  const getIcon = (iconType: string) => {
-    switch (iconType) {
-      case "stock":
-        return <Package className="w-4 h-4" />;
-      case "promotion":
-        return <Calendar className="w-4 h-4" />;
-      case "sales":
-        return <TrendingUp className="w-4 h-4" />;
-      case "trend":
-        return <TrendingDown className="w-4 h-4" />;
-      default:
-        return <Info className="w-4 h-4" />;
-    }
+  const markAsRead = (id: string) => setReadIds((prev) => new Set(prev).add(id));
+  const markAllAsRead = () =>
+    setReadIds((prev) => {
+      const next = new Set(prev);
+      notifications.forEach((n) => next.add(n.id));
+      return next;
+    });
+  const dismiss = (id: string) => setDismissedIds((prev) => new Set(prev).add(id));
+  const restoreDismissed = () => setDismissedIds(new Set());
+
+  const renderItem = (notification: NotificationItem) => {
+    const unread = !readIds.has(notification.id);
+    return (
+      <div
+        key={notification.id}
+        className={`p-3 rounded-lg border-2 ${typeColor(notification.type)} ${
+          unread ? "border-l-4 border-l-yellow-400" : "opacity-80"
+        } hover:bg-red-600 transition-colors cursor-pointer`}
+        onClick={() => markAsRead(notification.id)}
+      >
+        <div className="flex gap-3">
+          <div className="flex-shrink-0 mt-1">{ICONS[notification.category] ?? <Info className="w-4 h-4" />}</div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-start justify-between gap-2 mb-1">
+              <h4 className="text-yellow-300 text-sm font-semibold">{notification.title}</h4>
+              <Button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  dismiss(notification.id);
+                }}
+                variant="ghost"
+                size="sm"
+                className="h-5 w-5 p-0 hover:bg-red-900"
+                aria-label="Dismiss notification"
+              >
+                <X className="w-3 h-3 text-yellow-200" />
+              </Button>
+            </div>
+            <p className="text-yellow-200 text-xs mb-2">{notification.message}</p>
+            <div className="flex items-center justify-between">
+              <span className="text-yellow-300 text-xs opacity-75" title={notification.timestamp.toLocaleString()}>
+                {formatTimestamp(notification.timestamp)} · {CATEGORY_LABELS[notification.category]}
+              </span>
+              {notification.type === "critical" && (
+                <Badge className="bg-red-950 text-yellow-300 border-red-800 text-xs">
+                  <AlertTriangle className="w-3 h-3 mr-1" />
+                  Critical
+                </Badge>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   };
 
-  const getTypeColor = (type: string) => {
-    switch (type) {
-      case "critical":
-        return "bg-red-900 text-yellow-200 border-red-800";
-      case "warning":
-        return "bg-red-800 text-yellow-200 border-red-700";
-      case "success":
-        return "bg-green-900 text-yellow-200 border-green-800";
-      default:
-        return "bg-red-700 text-yellow-200 border-red-600";
-    }
-  };
+  const emptyState = (text: string) => (
+    <div className="text-center py-8 text-yellow-200">
+      <Bell className="w-12 h-12 mx-auto mb-2 opacity-50" />
+      <p>{text}</p>
+    </div>
+  );
 
-  const markAsRead = (id: string) => {
-    setReadIds((prev) => new Set(prev).add(id));
-  };
-
-  const markAllAsRead = () => {
-    setReadIds(new Set(notifications.map((n) => n.id)));
-  };
-
-  const deleteNotification = (id: string) => {
-    setDismissedIds((prev) => new Set(prev).add(id));
-  };
-
-  const formatTimestamp = (date: Date) => {
-    const now = new Date();
-    const diff = now.getTime() - date.getTime();
-    const minutes = Math.max(0, Math.floor(diff / 60000));
-    const hours = Math.floor(diff / 3600000);
-    const days = Math.floor(diff / 86400000);
-    if (minutes < 60) return `${minutes}m ago`;
-    if (hours < 24) return `${hours}h ago`;
-    return `${days}d ago`;
-  };
+  const filterOptions: Array<["all" | "unread" | Category, string, number]> = [
+    ["all", "All", notifications.length],
+    ["unread", "Unread", unreadCount],
+    ...(Object.keys(CATEGORY_LABELS) as Category[]).map(
+      (category) => [category, CATEGORY_LABELS[category], notifications.filter((n) => n.category === category).length] as ["all" | "unread" | Category, string, number],
+    ),
+  ];
 
   return (
     <div className="relative">
@@ -323,73 +414,87 @@ export function NotificationCenter() {
                     Mark all read
                   </Button>
                 )}
-                <Button onClick={() => setIsOpen(false)} variant="ghost" size="sm" className="text-yellow-300 hover:text-yellow-100 hover:bg-red-800">
+                <Button onClick={() => setIsOpen(false)} variant="ghost" size="sm" className="text-yellow-300 hover:text-yellow-100 hover:bg-red-800" aria-label="Close notifications">
                   <X className="w-4 h-4" />
                 </Button>
               </div>
             </div>
 
-            <ScrollArea className="h-[500px]">
+            <div className="max-h-[min(500px,calc(100vh-14rem))] overflow-y-auto">
               <div className="p-2">
                 {notifications.length === 0 ? (
-                  <div className="text-center py-8 text-yellow-200">
-                    <Bell className="w-12 h-12 mx-auto mb-2 opacity-50" />
-                    <p>No notifications</p>
-                  </div>
+                  emptyState("You're all caught up")
                 ) : (
-                  <div className="space-y-2">
-                    {notifications.map((notification) => (
-                      <div
-                        key={notification.id}
-                        className={`p-3 rounded-lg border-2 ${getTypeColor(notification.type)} ${
-                          !readIds.has(notification.id) ? "border-l-4 border-l-yellow-400" : ""
-                        } hover:bg-red-600 transition-colors cursor-pointer`}
-                        onClick={() => markAsRead(notification.id)}
-                      >
-                        <div className="flex gap-3">
-                          <div className="flex-shrink-0 mt-1">{getIcon(notification.icon)}</div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-start justify-between gap-2 mb-1">
-                              <h4 className="text-yellow-300 text-sm font-semibold">{notification.title}</h4>
-                              <Button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  deleteNotification(notification.id);
-                                }}
-                                variant="ghost"
-                                size="sm"
-                                className="h-5 w-5 p-0 hover:bg-red-900"
-                              >
-                                <X className="w-3 h-3 text-yellow-200" />
-                              </Button>
-                            </div>
-                            <p className="text-yellow-200 text-xs mb-2">{notification.message}</p>
-                            <div className="flex items-center justify-between">
-                              <span className="text-yellow-300 text-xs opacity-75">{formatTimestamp(notification.timestamp)}</span>
-                              {notification.type === "critical" && (
-                                <Badge className="bg-red-950 text-yellow-300 border-red-800 text-xs">
-                                  <AlertTriangle className="w-3 h-3 mr-1" />
-                                  Critical
-                                </Badge>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                  <div className="space-y-2">{notifications.slice(0, 8).map(renderItem)}</div>
                 )}
               </div>
-            </ScrollArea>
+            </div>
 
             <div className="p-3 border-t border-red-800 bg-red-800">
-              <Button variant="ghost" className="w-full text-yellow-300 hover:text-yellow-100 hover:bg-red-700 text-sm">
-                View All Notifications
+              <Button
+                variant="ghost"
+                className="w-full text-yellow-300 hover:text-yellow-100 hover:bg-red-700 text-sm"
+                onClick={() => {
+                  setIsOpen(false);
+                  setFilter("all");
+                  setShowAll(true);
+                }}
+              >
+                View All Notifications{notifications.length > 8 ? ` (${notifications.length})` : ""}
               </Button>
             </div>
           </div>
         </>
       )}
+
+      <Dialog open={showAll} onOpenChange={setShowAll}>
+        <DialogContent className="sm:max-w-2xl max-h-[85vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Bell className="w-5 h-5 text-yellow-400" />
+              All Notifications
+            </DialogTitle>
+            <DialogDescription>
+              Stock alerts, sales activity, promotions and promotion email results. Updates every few seconds.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            {filterOptions.map(([id, label, count]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setFilter(id)}
+                className={`rounded-full border px-2.5 py-0.5 text-xs transition ${
+                  filter === id ? "border-yellow-400 bg-yellow-400/10 text-yellow-200" : "border-zinc-700 text-zinc-300 hover:border-yellow-400/50"
+                }`}
+              >
+                {label} <span className="opacity-60">{count}</span>
+              </button>
+            ))}
+            <div className="ml-auto flex gap-1">
+              {unreadCount > 0 && (
+                <Button variant="ghost" size="sm" className="text-xs text-yellow-300" onClick={markAllAsRead}>
+                  Mark all read
+                </Button>
+              )}
+              {dismissedIds.size > 0 && (
+                <Button variant="ghost" size="sm" className="text-xs text-zinc-400" onClick={restoreDismissed}>
+                  Restore dismissed
+                </Button>
+              )}
+            </div>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+            {filtered.length === 0 ? (
+              emptyState(filter === "unread" ? "No unread notifications" : "No notifications here")
+            ) : (
+              <div className="space-y-2">{filtered.map(renderItem)}</div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
