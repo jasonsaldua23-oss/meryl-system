@@ -331,7 +331,7 @@ function ChartWhiteTooltip({ active, payload, label }: any) {
   );
 }
 
-type TrendBucketMode = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'annually';
+type TrendBucketMode = 'hourly' | 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'annually';
 
 function startOfDay(date: Date) {
   const copy = new Date(date);
@@ -366,6 +366,7 @@ function trendBucketMode(timeRange: ReportPeriod, days: number): TrendBucketMode
 }
 
 function bucketStartForDate(date: Date, mode: TrendBucketMode) {
+  if (mode === 'hourly') return new Date(date.getFullYear(), date.getMonth(), date.getDate(), date.getHours());
   const copy = startOfDay(date);
   if (mode === 'weekly') return weekStartSunday(copy);
   if (mode === 'monthly') return new Date(copy.getFullYear(), copy.getMonth(), 1);
@@ -376,7 +377,8 @@ function bucketStartForDate(date: Date, mode: TrendBucketMode) {
 
 function nextBucketStart(date: Date, mode: TrendBucketMode) {
   const next = new Date(date);
-  if (mode === 'weekly') next.setDate(next.getDate() + 7);
+  if (mode === 'hourly') next.setHours(next.getHours() + 1);
+  else if (mode === 'weekly') next.setDate(next.getDate() + 7);
   else if (mode === 'monthly') next.setMonth(next.getMonth() + 1);
   else if (mode === 'quarterly') next.setMonth(next.getMonth() + 3);
   else if (mode === 'annually') next.setFullYear(next.getFullYear() + 1);
@@ -385,6 +387,7 @@ function nextBucketStart(date: Date, mode: TrendBucketMode) {
 }
 
 function trendBucketLabel(bucket: Date, mode: TrendBucketMode) {
+  if (mode === 'hourly') return bucket.toLocaleTimeString('en-US', { hour: 'numeric' });
   if (mode === 'weekly') {
     const end = new Date(bucket);
     end.setDate(bucket.getDate() + 6);
@@ -404,9 +407,11 @@ function endOfDay(date: Date) {
 
 function salesTrendFrame(timeRange: ReportPeriod, customStartDate?: string, customEndDate?: string) {
   const frame = salesTrendFrameUncapped(timeRange, customStartDate, customEndDate);
-  // Never chart days that have not happened yet (they would plot as zero sales).
-  const endOfToday = endOfDay(new Date());
-  return { ...frame, end: frame.end > endOfToday ? endOfToday : frame.end };
+  // Never chart periods that have not happened yet (they would plot as zero sales):
+  // stop at the current hour for hourly charts, at today otherwise.
+  const now = new Date();
+  const cap = frame.mode === 'hourly' ? now : endOfDay(now);
+  return { ...frame, end: frame.end > cap ? cap : frame.end };
 }
 
 function salesTrendFrameUncapped(timeRange: ReportPeriod, customStartDate?: string, customEndDate?: string) {
@@ -414,10 +419,8 @@ function salesTrendFrameUncapped(timeRange: ReportPeriod, customStartDate?: stri
   const baseEnd = window.now;
 
   if (timeRange === 'daily') {
-    const end = endOfDay(baseEnd);
-    const start = startOfDay(new Date(baseEnd));
-    start.setDate(start.getDate() - 6);
-    return { start, end, mode: 'daily' as TrendBucketMode };
+    // One day: chart it hour by hour.
+    return { start: startOfDay(window.start), end: endOfDay(window.start), mode: 'hourly' as TrendBucketMode };
   }
 
   if (timeRange === 'weekly') {
@@ -441,6 +444,102 @@ function salesTrendFrameUncapped(timeRange: ReportPeriod, customStartDate?: stri
     end: window.now,
     mode: trendBucketMode(timeRange, window.days),
   };
+}
+
+/**
+ * Fixed periods for the Sales Breakdown (see the comment on salesBreakdown).
+ * Pure so it can be tested; sales are filled in by the caller.
+ */
+export function buildBreakdownSlots(
+  timeRange: ReportPeriod,
+  customStartDate?: string,
+  customEndDate?: string,
+  now: Date = new Date(),
+) {
+  const window = rangeWindow(timeRange, customStartDate, customEndDate);
+  type Slot = { label: string; start: Date; end: Date; pairs: number; gross: number; discount: number; net: number; transactions: number };
+  const slots: Slot[] = [];
+  const addSlot = (start: Date, end: Date, label: string) =>
+    slots.push({ label, start, end, pairs: 0, gross: 0, discount: 0, net: 0, transactions: 0 });
+  const shortDate = (date: Date, withYear = false) =>
+    date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(withYear ? { year: 'numeric' } : {}) });
+  const hourLabel = (date: Date) => date.toLocaleTimeString('en-US', { hour: 'numeric' });
+  const year = now.getFullYear();
+  let rangeLabel = '';
+  let unit = 'period';
+
+  const addDays = (from: Date, to: Date) => {
+    for (let day = startOfDay(from); day <= to; day = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1)) {
+      addSlot(day, endOfDay(day), shortDate(day, true));
+    }
+  };
+  const addMonths = (from: Date, to: Date, withYear: boolean) => {
+    for (let month = new Date(from.getFullYear(), from.getMonth(), 1); month <= to; month = new Date(month.getFullYear(), month.getMonth() + 1, 1)) {
+      addSlot(month, new Date(month.getFullYear(), month.getMonth() + 1, 1, 0, 0, 0, -1),
+        month.toLocaleDateString('en-US', withYear ? { month: 'long', year: 'numeric' } : { month: 'long' }));
+    }
+  };
+
+  if (timeRange === 'daily') {
+    const day = startOfDay(window.start);
+    for (let hour = 0; hour < 24; hour += 1) {
+      const start = new Date(day.getFullYear(), day.getMonth(), day.getDate(), hour);
+      const next = new Date(day.getFullYear(), day.getMonth(), day.getDate(), hour + 1);
+      addSlot(start, new Date(next.getTime() - 1), `${hourLabel(start)} – ${hourLabel(next)}`);
+    }
+    rangeLabel = `Each hour of ${shortDate(day, true)}`;
+    unit = 'hour';
+  } else if (timeRange === 'weekly') {
+    const thisWeek = weekStartSunday(now);
+    for (let back = 25; back >= 0; back -= 1) {
+      const start = new Date(thisWeek.getFullYear(), thisWeek.getMonth(), thisWeek.getDate() - back * 7);
+      const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7, 0, 0, 0, -1);
+      addSlot(start, end, `${shortDate(start)} – ${shortDate(end, start.getFullYear() !== end.getFullYear() || back === 0)}`);
+    }
+    rangeLabel = `Last 26 weeks (${shortDate(slots[0].start, true)} – ${shortDate(slots[slots.length - 1].end, true)})`;
+    unit = 'week';
+  } else if (timeRange === 'monthly') {
+    addMonths(new Date(year, 0, 1), new Date(year, 11, 31), false);
+    rangeLabel = `January – December ${year}`;
+    unit = 'month';
+  } else if (timeRange === 'quarterly') {
+    for (let quarter = 0; quarter < 4; quarter += 1) {
+      const start = new Date(year, quarter * 3, 1);
+      const end = new Date(year, quarter * 3 + 3, 1, 0, 0, 0, -1);
+      addSlot(start, end, `Q${quarter + 1} (${start.toLocaleDateString('en-US', { month: 'short' })} – ${end.toLocaleDateString('en-US', { month: 'short' })})`);
+    }
+    rangeLabel = `Q1 – Q4 ${year}`;
+    unit = 'quarter';
+  } else if (timeRange === 'annually') {
+    for (let y = year - 4; y <= year; y += 1) {
+      addSlot(new Date(y, 0, 1), new Date(y + 1, 0, 1, 0, 0, 0, -1), String(y));
+    }
+    rangeLabel = `${year - 4} – ${year}`;
+    unit = 'year';
+  } else {
+    const days = window.days;
+    if (days <= 92) {
+      addDays(window.start, window.now);
+      unit = 'day';
+    } else if (days <= 731) {
+      addMonths(window.start, window.now, true);
+      unit = 'month';
+    } else {
+      for (let y = window.start.getFullYear(); y <= window.now.getFullYear(); y += 1) {
+        addSlot(new Date(y, 0, 1), new Date(y + 1, 0, 1, 0, 0, 0, -1), String(y));
+      }
+      unit = 'year';
+    }
+    // Custom ranges start/end mid-period: clip the first and last slot to the range.
+    if (slots.length) {
+      slots[0].start = window.start > slots[0].start ? window.start : slots[0].start;
+      const last = slots[slots.length - 1];
+      last.end = window.now < last.end ? window.now : last.end;
+    }
+    rangeLabel = formatDateRange(window.start, window.now);
+  }
+
+  return { slots, rangeLabel, unit };
 }
 
 export function ReportsAnalytics() {
@@ -511,7 +610,7 @@ export function ReportsAnalytics() {
       let totalCost = 0;
       rows.forEach((sale) => {
         revenue += Number(sale.total_amount ?? 0);
-        if (sale.customer_id) customers.add(String(sale.customer_id));
+        customers.add(sale.customer_id ? String(sale.customer_id) : `walk-in:${String(sale.sales_id ?? Math.random())}`);
         const details = Array.isArray(sale.sales_details) ? sale.sales_details : [];
         details.forEach((detail: any) => {
           const qty = Number(detail.quantity ?? 0);
@@ -536,7 +635,7 @@ export function ReportsAnalytics() {
 
     while (cursor <= end) {
       const bucket = new Date(cursor);
-      grouped.set(localDateKey(bucket), {
+      grouped.set(String(bucket.getTime()), {
         sales: 0,
         revenue: 0,
         customers: new Set<string>(),
@@ -549,14 +648,15 @@ export function ReportsAnalytics() {
       const date = saleDate(sale);
       if (!date || date < start || date > end) return;
       const bucket = bucketStartForDate(date, mode);
-      const key = localDateKey(bucket);
+      const key = String(bucket.getTime());
       const prev = grouped.get(key) ?? { sales: 0, revenue: 0, customers: new Set<string>(), firstDate: bucket };
       const details = Array.isArray(sale.sales_details) ? sale.sales_details : [];
       details.forEach((detail: any) => {
         prev.sales += Number(detail.quantity ?? 0);
       });
       prev.revenue += Number(sale.total_amount ?? 0);
-      if (sale.customer_id) prev.customers.add(String(sale.customer_id));
+      // Walk-in sales have no customer record; each one is still a customer served.
+      prev.customers.add(sale.customer_id ? String(sale.customer_id) : `walk-in:${String(sale.sales_id ?? Math.random())}`);
       grouped.set(key, prev);
     });
     return Array.from(grouped.entries())
@@ -1340,107 +1440,52 @@ export function ReportsAnalytics() {
     return rows.length ? rows : [{ id: 'cd-empty', name: 'No Sales', value: 100, color: '#fef9c3' }];
   }, [revenueByCategory]);
 
-  const salesBreakdownPeriod: 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'annually' = useMemo(() => {
-    if (timeRange === 'quarterly') return 'quarterly';
-    if (timeRange === 'annually') return 'annually';
-    if (timeRange === 'monthly') return 'monthly';
-    if (timeRange === 'weekly') return 'weekly';
-    return 'daily';
-  }, [timeRange]);
+  // Sales Breakdown lays out fixed periods first (so periods without sales are
+  // still listed), then fills them with sales:
+  //   Daily -> each hour of the day      Weekly -> each of the last 26 weeks
+  //   Monthly -> January-December        Quarterly -> Q1-Q4 of this year
+  //   Annually -> the last 5 years       Custom -> each day (months/years if long)
+  // Periods that have not started yet are marked upcoming instead of showing 0.
+  const salesBreakdown = useMemo(() => {
+    const now = new Date();
+    const { slots, rangeLabel, unit } = buildBreakdownSlots(timeRange, customStartDate, customEndDate, now);
 
-  const salesBreakdownRows = useMemo(() => {
-    const { now, start } = rangeWindow(timeRange, customStartDate, customEndDate);
-    const grouped = new Map<string, { label: string; date: Date; pairs: number; gross: number; discount: number; net: number }>();
-
-    const getBreakdownKey = (date: Date) => {
-      if (salesBreakdownPeriod === 'monthly') {
-        return {
-          key: localDayKey(date).slice(0, 7),
-          label: date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
-          date: new Date(date.getFullYear(), date.getMonth(), 1),
-        };
-      }
-
-      if (salesBreakdownPeriod === 'quarterly') {
-        const quarter = Math.floor(date.getMonth() / 3) + 1;
-        const quarterStartMonth = (quarter - 1) * 3;
-        return {
-          key: `${date.getFullYear()}-Q${quarter}`,
-          label: `Q${quarter} ${date.getFullYear()}`,
-          date: new Date(date.getFullYear(), quarterStartMonth, 1),
-        };
-      }
-
-      if (salesBreakdownPeriod === 'annually') {
-        return {
-          key: String(date.getFullYear()),
-          label: String(date.getFullYear()),
-          date: new Date(date.getFullYear(), 0, 1),
-        };
-      }
-
-      if (salesBreakdownPeriod === 'weekly') {
-        const weekStart = weekStartSunday(date);
-        const weekEnd = new Date(weekStart);
-        weekEnd.setDate(weekStart.getDate() + 6);
-
-        return {
-          key: localDateKey(weekStart),
-          label: `${weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${weekEnd.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
-          date: weekStart,
-        };
-      }
-
-      return {
-        key: localDayKey(date),
-        label: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-        date,
-      };
-    };
-
-    // Daily report lists every day in the range, including days without sales
-    // (up to a year, so very long custom ranges stay readable).
-    const rangeDays = Math.round((startOfDay(now).getTime() - startOfDay(start).getTime()) / 86400000) + 1;
-    if (salesBreakdownPeriod === 'daily' && rangeDays <= 366) {
-      for (let day = startOfDay(start); day <= now; day.setDate(day.getDate() + 1)) {
-        const period = getBreakdownKey(new Date(day));
-        grouped.set(period.key, { label: period.label, date: period.date, pairs: 0, gross: 0, discount: 0, net: 0 });
-      }
-    }
-
+    const first = slots[0]?.start;
+    const last = slots[slots.length - 1]?.end;
     salesRows.forEach((sale) => {
       const date = saleDate(sale);
-      if (!date || date < start || date > now) return;
-      const period = getBreakdownKey(date);
-      const prev = grouped.get(period.key) ?? { label: period.label, date: period.date, pairs: 0, gross: 0, discount: 0, net: 0 };
+      if (!date || !first || !last || date < first || date > last) return;
+      const slot = slots.find((item) => date >= item.start && date <= item.end);
+      if (!slot) return;
+      slot.transactions += 1;
       const details = Array.isArray(sale.sales_details) ? sale.sales_details : [];
-
       details.forEach((detail: any) => {
         const qty = Number(detail.quantity ?? 0);
         const price = Number(detail.price ?? 0);
         const subtotal = Number(detail.subtotal ?? price * qty);
         const gross = price * qty;
-        prev.pairs += qty;
-        prev.gross += gross;
-        prev.discount += Math.max(0, gross - subtotal);
-        prev.net += subtotal;
+        slot.pairs += qty;
+        slot.gross += gross;
+        slot.discount += Math.max(0, gross - subtotal);
+        slot.net += subtotal;
       });
-
-      grouped.set(period.key, prev);
     });
 
-    return Array.from(grouped.values())
-      .sort((a, b) => a.date.getTime() - b.date.getTime())
-      .map((row, index) => ({
-        id: `daily-${index}`,
-        date: row.label,
-        pairs: row.pairs,
-        gross: row.gross,
-        discount: row.discount,
-        net: row.net,
-        hasSales: row.pairs > 0 || row.net > 0,
-      }));
-  }, [customEndDate, customStartDate, salesBreakdownPeriod, salesRows, timeRange]);
+    const rows = slots.map((slot, index) => ({
+      id: `breakdown-${index}`,
+      date: slot.label,
+      pairs: slot.pairs,
+      gross: slot.gross,
+      discount: slot.discount,
+      net: slot.net,
+      transactions: slot.transactions,
+      hasSales: slot.transactions > 0,
+      upcoming: slot.start > now,
+    }));
+    return { rows, rangeLabel, unit };
+  }, [customEndDate, customStartDate, salesRows, timeRange]);
+
+  const salesBreakdownRows = salesBreakdown.rows;
 
   const inventoryAnalytics = useMemo(() => {
     let totalStock = 0;
@@ -2056,8 +2101,8 @@ export function ReportsAnalytics() {
       drawTitle('Sales Trend');
       drawTable(['Period', 'Units Sold', 'Revenue', 'Customers'], filteredSalesTrends.map((row) => [row.date, row.sales, money(row.revenue), row.customers]));
     } else if (reportType === 'sales') {
-      drawTitle('Sales Breakdown');
-      drawTable(['Period', 'Pairs Sold', 'Gross Revenue', 'Discount Applied', 'Net Sales'], salesBreakdownRows.map((row) => [row.date, row.pairs, money(row.gross), money(row.discount), money(row.net)]));
+      drawTitle(`Sales Breakdown - ${salesBreakdown.rangeLabel}`);
+      drawTable(['Period', 'Transactions', 'Pairs Sold', 'Gross Revenue', 'Discount', 'Net Sales'], salesBreakdownRows.filter((row) => !row.upcoming).map((row) => [row.date, row.transactions, row.pairs, money(row.gross), money(row.discount), money(row.net)]), [125, 70, 65, 90, 75, 90]);
     } else if (reportType === 'rankings') {
       drawTitle('Top 5 Shoe Models');
       drawTable(['Rank', 'Shoe Model', 'Pairs', 'Revenue'], topRankings.products.byRevenue.map((row) => [`#${row.rank}`, row.name, `${row.sales}`, money(row.revenue)]), [40, 240, 65, 170]);
@@ -2326,10 +2371,10 @@ export function ReportsAnalytics() {
 
       // Section 2: Report-Specific Data
       if (reportType === 'sales') {
-        lines.push(formatRow(['=== SALES BREAKDOWN BY PERIOD ===']));
-        lines.push(formatRow(['Period', 'Pairs Sold', 'Gross Revenue (PHP)', 'Discount Applied (PHP)', 'Net Sales (PHP)']));
-        salesBreakdownRows.forEach((r) => {
-          lines.push(formatRow([r.date, r.pairs, r.gross.toFixed(2), r.discount.toFixed(2), r.net.toFixed(2)]));
+        lines.push(formatRow([`=== SALES BREAKDOWN: ${salesBreakdown.rangeLabel} ===`]));
+        lines.push(formatRow(['Period', 'Transactions', 'Pairs Sold', 'Gross Revenue (PHP)', 'Discount Applied (PHP)', 'Net Sales (PHP)']));
+        salesBreakdownRows.filter((r) => !r.upcoming).forEach((r) => {
+          lines.push(formatRow([r.date, r.transactions, r.pairs, r.gross.toFixed(2), r.discount.toFixed(2), r.net.toFixed(2)]));
         });
         lines.push('');
       }
@@ -2985,7 +3030,7 @@ export function ReportsAnalytics() {
             const valueOf = (row: (typeof filteredSalesTrends)[number]) => (isRevenue ? row.revenue : row.sales);
             const formatValue = (value: number) => (isRevenue ? money(value) : `${value.toLocaleString()} pair${value === 1 ? '' : 's'}`);
             const bucketMode = salesTrendFrame(timeRange, customStartDate, customEndDate).mode;
-            const bucketNoun = { daily: 'day', weekly: 'week', monthly: 'month', quarterly: 'quarter', annually: 'year' }[bucketMode];
+            const bucketNoun = { hourly: 'hour', daily: 'day', weekly: 'week', monthly: 'month', quarterly: 'quarter', annually: 'year' }[bucketMode];
             const points = filteredSalesTrends;
             const total = points.reduce((sum, row) => sum + valueOf(row), 0);
             const average = points.length ? total / points.length : 0;
@@ -3137,53 +3182,75 @@ export function ReportsAnalytics() {
       {reportType === 'sales' && (
         <div className="space-y-4">
           <Card className="bg-[#0b0b0f] border-[#24242d]">
-            <CardHeader className="flex flex-row items-center justify-between gap-3">
-              <CardTitle className="text-yellow-300 flex items-center gap-2">
-                <TrendingUp className="w-5 h-5" />
-                Sales Breakdown
-              </CardTitle>
+            <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3">
+              <div>
+                <CardTitle className="text-yellow-300 flex items-center gap-2">
+                  <TrendingUp className="w-5 h-5" />
+                  Sales Breakdown
+                </CardTitle>
+                <p className="mt-1 text-sm text-white/55">{salesBreakdown.rangeLabel}</p>
+              </div>
+              {(() => {
+                const elapsed = salesBreakdownRows.filter((row) => !row.upcoming);
+                const withSales = elapsed.filter((row) => row.hasSales).length;
+                return (
+                  <p className="text-xs text-white/55">
+                    {withSales} of {elapsed.length} {salesBreakdown.unit}s had sales
+                  </p>
+                );
+              })()}
             </CardHeader>
             <CardContent>
-              <Table className="overflow-hidden rounded-lg border border-[#24242d] bg-[#07070a]">
-                <TableHeader className="bg-[#0b0b0f]">
-                  <TableRow className="border-[#24242d] hover:bg-[#0b0b0f]">
-                    <TableHead className="text-yellow-300">Period</TableHead>
-                    <TableHead className="text-yellow-300 text-center">Pairs Sold</TableHead>
-                    <TableHead className="text-yellow-300 text-center">Gross Revenue</TableHead>
-                    <TableHead className="text-yellow-300 text-center">Discount Applied</TableHead>
-                    <TableHead className="text-yellow-300 text-center">Net Sales</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {salesBreakdownRows.map((row) =>
-                    row.hasSales ? (
-                      <TableRow key={row.id} className="border-[#24242d] bg-[#07070a] hover:bg-white/[0.03]">
-                        <TableCell className="text-yellow-200">{row.date}</TableCell>
-                        <TableCell className="text-yellow-200 text-center">{row.pairs}</TableCell>
-                        <TableCell className="text-yellow-200 text-center">{money(row.gross)}</TableCell>
-                        <TableCell className="text-yellow-200 text-center">{money(row.discount)}</TableCell>
-                        <TableCell className="text-yellow-300 text-center">{money(row.net)}</TableCell>
-                      </TableRow>
-                    ) : (
-                      <TableRow key={row.id} className="border-[#24242d] bg-[#07070a] hover:bg-white/[0.02]">
-                        <TableCell className="text-white/40">
-                          {row.date}
-                          <span className="ml-2 rounded border border-white/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-white/40">No sales</span>
-                        </TableCell>
-                        <TableCell className="text-white/30 text-center">0</TableCell>
-                        <TableCell className="text-white/30 text-center">{money(0)}</TableCell>
-                        <TableCell className="text-white/30 text-center">{money(0)}</TableCell>
-                        <TableCell className="text-white/30 text-center">{money(0)}</TableCell>
-                      </TableRow>
-                    ),
-                  )}
-                  {!salesBreakdownRows.length && (
-                    <TableRow className="border-[#24242d] bg-[#07070a]">
-                      <TableCell colSpan={5} className="text-center text-yellow-200 py-6">No completed sales found for this date range.</TableCell>
+              <div className="overflow-x-auto">
+                <Table className="overflow-hidden rounded-lg border border-[#24242d] bg-[#07070a]">
+                  <TableHeader className="bg-[#0b0b0f]">
+                    <TableRow className="border-[#24242d] hover:bg-[#0b0b0f]">
+                      <TableHead className="text-yellow-300">Period</TableHead>
+                      <TableHead className="text-yellow-300 text-center">Transactions</TableHead>
+                      <TableHead className="text-yellow-300 text-center">Pairs Sold</TableHead>
+                      <TableHead className="text-yellow-300 text-center">Gross Revenue</TableHead>
+                      <TableHead className="text-yellow-300 text-center">Discount Applied</TableHead>
+                      <TableHead className="text-yellow-300 text-center">Net Sales</TableHead>
                     </TableRow>
-                  )}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {salesBreakdownRows.map((row) => {
+                      if (row.hasSales) {
+                        return (
+                          <TableRow key={row.id} className="border-[#24242d] bg-[#07070a] hover:bg-white/[0.03]">
+                            <TableCell className="text-yellow-200">{row.date}</TableCell>
+                            <TableCell className="text-yellow-200 text-center">{row.transactions}</TableCell>
+                            <TableCell className="text-yellow-200 text-center">{row.pairs}</TableCell>
+                            <TableCell className="text-yellow-200 text-center">{money(row.gross)}</TableCell>
+                            <TableCell className="text-yellow-200 text-center">{money(row.discount)}</TableCell>
+                            <TableCell className="text-yellow-300 text-center">{money(row.net)}</TableCell>
+                          </TableRow>
+                        );
+                      }
+                      const tag = row.upcoming ? 'Upcoming' : 'No sales';
+                      const blank = row.upcoming ? '—' : null;
+                      return (
+                        <TableRow key={row.id} className="border-[#24242d] bg-[#07070a] hover:bg-white/[0.02]">
+                          <TableCell className="text-white/40">
+                            {row.date}
+                            <span className="ml-2 rounded border border-white/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-white/40">{tag}</span>
+                          </TableCell>
+                          <TableCell className="text-white/30 text-center">{blank ?? 0}</TableCell>
+                          <TableCell className="text-white/30 text-center">{blank ?? 0}</TableCell>
+                          <TableCell className="text-white/30 text-center">{blank ?? money(0)}</TableCell>
+                          <TableCell className="text-white/30 text-center">{blank ?? money(0)}</TableCell>
+                          <TableCell className="text-white/30 text-center">{blank ?? money(0)}</TableCell>
+                        </TableRow>
+                      );
+                    })}
+                    {!salesBreakdownRows.length && (
+                      <TableRow className="border-[#24242d] bg-[#07070a]">
+                        <TableCell colSpan={6} className="text-center text-yellow-200 py-6">No periods in this date range.</TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
             </CardContent>
           </Card>
         </div>

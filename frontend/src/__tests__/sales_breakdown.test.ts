@@ -1,0 +1,71 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildBreakdownSlots } from "../app/components/ReportsAnalytics";
+
+const NOW = new Date(2026, 8, 26, 14, 30, 0); // Sat, Sep 26, 2026 2:30 PM local
+
+describe("Sales Breakdown periods", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("daily: all 24 hours of today, contiguous", () => {
+    const { slots, unit } = buildBreakdownSlots("daily", undefined, undefined, NOW);
+    expect(unit).toBe("hour");
+    expect(slots).toHaveLength(24);
+    expect(slots[0].start).toEqual(new Date(2026, 8, 26, 0));
+    expect(slots[0].label).toBe("12 AM – 1 AM");
+    expect(slots[14].label).toBe("2 PM – 3 PM");
+    expect(slots[23].end).toEqual(new Date(2026, 8, 26, 23, 59, 59, 999));
+    slots.slice(1).forEach((slot, i) => expect(slot.start.getTime()).toBe(slots[i].end.getTime() + 1));
+  });
+
+  it("weekly: 26 Sunday-start weeks ending with this week", () => {
+    const { slots, unit } = buildBreakdownSlots("weekly", undefined, undefined, NOW);
+    expect(unit).toBe("week");
+    expect(slots).toHaveLength(26);
+    expect(slots[25].start).toEqual(new Date(2026, 8, 20)); // Sun Sep 20
+    expect(slots[25].end).toEqual(new Date(2026, 8, 26, 23, 59, 59, 999));
+    expect(slots[0].start).toEqual(new Date(2026, 2, 29)); // 25 weeks earlier
+    slots.forEach((slot) => expect(slot.start.getDay()).toBe(0));
+    slots.slice(1).forEach((slot, i) => expect(slot.start.getTime()).toBe(slots[i].end.getTime() + 1));
+  });
+
+  it("monthly: January to December of this year", () => {
+    const { slots, rangeLabel } = buildBreakdownSlots("monthly", undefined, undefined, NOW);
+    expect(slots.map((s) => s.label)).toEqual([
+      "January", "February", "March", "April", "May", "June",
+      "July", "August", "September", "October", "November", "December",
+    ]);
+    expect(slots[1].end).toEqual(new Date(2026, 1, 28, 23, 59, 59, 999));
+    expect(rangeLabel).toBe("January – December 2026");
+  });
+
+  it("quarterly: Q1-Q4 of this year", () => {
+    const { slots } = buildBreakdownSlots("quarterly", undefined, undefined, NOW);
+    expect(slots.map((s) => s.label)).toEqual(["Q1 (Jan – Mar)", "Q2 (Apr – Jun)", "Q3 (Jul – Sep)", "Q4 (Oct – Dec)"]);
+    expect(slots[3].end).toEqual(new Date(2026, 11, 31, 23, 59, 59, 999));
+  });
+
+  it("annually: the last 5 years", () => {
+    const { slots } = buildBreakdownSlots("annually", undefined, undefined, NOW);
+    expect(slots.map((s) => s.label)).toEqual(["2022", "2023", "2024", "2025", "2026"]);
+  });
+
+  it("custom: one row per day, clipped to the range", () => {
+    const { slots, unit } = buildBreakdownSlots("custom", "2026-09-01", "2026-09-10", NOW);
+    expect(unit).toBe("day");
+    expect(slots).toHaveLength(10);
+    expect(slots[0].start).toEqual(new Date(2026, 8, 1));
+    expect(slots[9].end).toEqual(new Date(2026, 8, 10, 23, 59, 59, 999));
+  });
+
+  it("custom: long ranges switch to months", () => {
+    const { slots, unit } = buildBreakdownSlots("custom", "2026-01-15", "2026-09-10", NOW);
+    expect(unit).toBe("month");
+    expect(slots).toHaveLength(9);
+    expect(slots[0].start).toEqual(new Date(2026, 0, 15));
+    expect(slots[8].end).toEqual(new Date(2026, 8, 10, 23, 59, 59, 999));
+  });
+});
