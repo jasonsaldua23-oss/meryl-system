@@ -1296,7 +1296,7 @@ function formatReceiptNumber(salesId?: string) {
       change_amount: paymentMethod === "Cash" ? Number(data?.change_amount ?? Math.max(0, (Number(cashReceived) || total) - total)) : 0,
       paymentMethod,
       gcashRefNumber: paymentMethod === "GCash" ? gcashRefNumber.trim() : "",
-      cashier: user.name || "Cashier 1",
+      cashier: `${user.name || user.username || "Cashier"}${user.staff_code ? ` (${user.staff_code})` : ""}`,
     };
     setReceiptData(receipt);
     setShowReceipt(true);

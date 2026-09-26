@@ -56,6 +56,8 @@ type ReturnRow = {
   return_status: string;
   processedBy: string;
   staffCode: string;
+  originalCashier: string;
+  originalCashierCode: string;
   salesStatus: string;
   receiptProofName: string;
   receiptProofPath: string;
@@ -180,6 +182,11 @@ function formatCurrency(value: number) {
 
 function formatSequence(prefix: string, sequence: number) {
   return `${prefix}-${String(sequence).padStart(3, "0")}`;
+}
+
+function withStaffCode(name: string, code?: string) {
+  const cleanCode = String(code ?? "").trim();
+  return cleanCode && cleanCode !== "N/A" ? `${name} (${cleanCode})` : name;
 }
 
 function normalizeProductName(value: string) {
@@ -1366,10 +1373,15 @@ export function ReturnManagement() {
       returnDisplayMap.set(String(row.return_id ?? ""), formatSequence("EXC", index + 1));
     });
 
+    const usersById = new Map(
+      ((usersQuery.data as any[]) ?? []).map((staff: any) => [String(staff.user_id ?? ""), staff]),
+    );
+
     return returnRows.map((row: any) => {
       const sale = Array.isArray(row.sales_transaction) ? row.sales_transaction[0] : row.sales_transaction;
       const customer = Array.isArray(sale?.customer) ? sale.customer[0] : sale?.customer;
       const processedUser = Array.isArray(row.user) ? row.user[0] : row.user;
+      const originalCashierUser = usersById.get(String(sale?.user_id ?? ""));
       const details = Array.isArray(row.return_details) ? row.return_details : [];
       const localProof =
         storedReceiptsMap.get(String(row.return_id ?? "")) ||
@@ -1391,6 +1403,8 @@ export function ReturnManagement() {
         return_status: String(row.return_status ?? "Completed"),
         processedBy: processedUser?.name ?? processedUser?.username ?? "Staff",
         staffCode: String(processedUser?.staff_code ?? processedUser?.staffCode ?? "N/A"),
+        originalCashier: String(originalCashierUser?.name ?? originalCashierUser?.username ?? "N/A"),
+        originalCashierCode: String(originalCashierUser?.staff_code ?? ""),
         salesStatus: normalizeSaleStatus(sale?.sales_status ?? sale?.status),
         receiptProofName: String(row.receipt_proof_name || localProof?.name || ""),
         receiptProofPath: String(row.receipt_proof_path ?? ""),
@@ -1439,7 +1453,7 @@ export function ReturnManagement() {
         }),
       };
     });
-  }, [productMap, returnRows, salesDisplayMap, storedReceiptsMap]);
+  }, [productMap, returnRows, salesDisplayMap, storedReceiptsMap, usersQuery.data]);
 
   const visibleReturns = useMemo(
     () => (isAdmin ? displayReturns : displayReturns.filter((row) => row.user_id === String(user?.user_id ?? ""))),
@@ -3412,7 +3426,8 @@ export function ReturnManagement() {
                   ["Orig. Receipt", printExchangeSlip.display_sales_id, true],
                   ["Date", printExchangeSlip.return_date, false],
                   ["Customer", printExchangeSlip.customerName, false],
-                  ["Processed By", printExchangeSlip.processedBy, false],
+                  ["Orig. Cashier", withStaffCode(printExchangeSlip.originalCashier, printExchangeSlip.originalCashierCode), false],
+                  ["Processed By", withStaffCode(printExchangeSlip.processedBy, printExchangeSlip.staffCode), false],
                 ].map(([label, value, bold]) => (
                   <div key={String(label)} className="flex justify-between gap-2">
                     <span className="shrink-0">{label}</span>
@@ -3473,8 +3488,10 @@ export function ReturnManagement() {
                   <p>Customer Signature</p>
                 </div>
                 <div>
-                  <div className="border-b border-black h-8 mb-1"></div>
-                  <p>Authorized Cashier</p>
+                  <div className="border-b border-black h-8 mb-1 flex items-end justify-center">
+                    <span className="text-[9.5px] font-semibold uppercase truncate">{printExchangeSlip.processedBy}</span>
+                  </div>
+                  <p>Authorized Staff</p>
                 </div>
               </div>
 

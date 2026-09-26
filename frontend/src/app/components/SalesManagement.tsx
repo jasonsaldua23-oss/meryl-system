@@ -116,7 +116,7 @@ export function SalesManagement() {
       rawSalesId: saleIdStr,
       displayId: sale.display_sales_id,
       date: dateFormatted,
-      cashier: sale.cashierName || "Administrator",
+      cashier: `${sale.cashierName || "Staff"}${sale.cashierCode ? ` (${sale.cashierCode})` : ""}`,
       customerName: sale.customerName || "Walk-in Customer",
       items: sale.saleDetails.map((d: any) => ({
         name: d.productName,
