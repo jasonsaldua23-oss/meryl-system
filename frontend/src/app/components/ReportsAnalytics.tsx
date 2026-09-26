@@ -5,7 +5,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Badge } from './ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { BarChart3, TrendingUp, Coins, Package, Calendar, Download, FileText, Trophy, Medal, Sparkles, Layers, Tag, UserCheck, CreditCard, Grid, FileSpreadsheet, Search, ShoppingBag, ArrowUpRight, ChevronLeft, ChevronRight, X, Filter } from 'lucide-react';
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, ReferenceLine, ReferenceDot } from 'recharts';
 import { toast } from 'sonner';
 import { useProducts, useSales } from '../../lib/hooks';
 import { shortId } from './ui/utils';
@@ -446,6 +446,7 @@ function salesTrendFrameUncapped(timeRange: ReportPeriod, customStartDate?: stri
 export function ReportsAnalytics() {
   const [timeRange, setTimeRange] = useState<ReportPeriod>('monthly');
   const [reportType, setReportType] = useState('overview');
+  const [trendMetric, setTrendMetric] = useState<'revenue' | 'pairs'>('revenue');
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
   const [showComparison, setShowComparison] = useState(true);
@@ -2978,97 +2979,158 @@ export function ReportsAnalytics() {
             </CardContent>
           </Card>
 
-          <Card className="bg-[#0b0b0f] border-[#24242d]">
-            <CardHeader>
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <CardTitle className="text-yellow-300 flex items-center gap-2">
-                    <TrendingUp className="w-5 h-5" />
-                    Sales Performance Over Time
-                  </CardTitle>
-                  <p className="mt-1 text-sm text-white/55">
-                    Revenue trend with units sold on the right axis
-                  </p>
+          {(() => {
+            // One measure per chart (no dual axis): revenue or pairs, chosen by the toggle.
+            const isRevenue = trendMetric === 'revenue';
+            const valueOf = (row: (typeof filteredSalesTrends)[number]) => (isRevenue ? row.revenue : row.sales);
+            const formatValue = (value: number) => (isRevenue ? money(value) : `${value.toLocaleString()} pair${value === 1 ? '' : 's'}`);
+            const bucketMode = salesTrendFrame(timeRange, customStartDate, customEndDate).mode;
+            const bucketNoun = { daily: 'day', weekly: 'week', monthly: 'month', quarterly: 'quarter', annually: 'year' }[bucketMode];
+            const points = filteredSalesTrends;
+            const total = points.reduce((sum, row) => sum + valueOf(row), 0);
+            const average = points.length ? total / points.length : 0;
+            const peak = points.reduce<(typeof points)[number] | null>((best, row) => (!best || valueOf(row) > valueOf(best) ? row : best), null);
+            const emptyBuckets = points.filter((row) => row.revenue === 0 && row.sales === 0).length;
+            const showDots = points.length <= 31;
+            // Axis/label amounts: ₱200K, ₱28.5K (no trailing ".0").
+            const shortAmount = (value: number) =>
+              isRevenue ? moneyCompact(value).replace('PHP ', '₱').replace('.0K', 'K').replace('.0M', 'M') : Math.round(value).toLocaleString();
+            // Keep the peak label inside the plot when the peak is the first or last point.
+            const peakIndex = peak ? points.indexOf(peak) : -1;
+            const peakLabelPosition = peakIndex === 0 ? 'right' : peakIndex === points.length - 1 ? 'left' : 'top';
+            // Four even, round steps with ~10% headroom above the peak (e.g. 0, 60K, 120K, 180K, 240K).
+            const peakValue = peak ? valueOf(peak) : 0;
+            const rawStep = Math.max(peakValue * 1.1, isRevenue ? 100 : 4) / 4;
+            const magnitude = 10 ** Math.floor(Math.log10(rawStep));
+            const niceStep = ([1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].find((n) => n * magnitude >= rawStep) ?? 10) * magnitude;
+            const step = isRevenue ? niceStep : Math.max(1, Math.ceil(niceStep));
+            const yTicks = [0, step, step * 2, step * 3, step * 4];
+
+            const TrendTooltip = ({ active, payload, label }: any) => {
+              if (!active || !payload?.length) return null;
+              const row = payload[0].payload;
+              return (
+                <div className="rounded-xl border border-white/15 bg-[#16161C] px-3.5 py-2.5 text-xs shadow-2xl">
+                  <p className="mb-1.5 text-[13px] font-semibold text-white">{label}</p>
+                  {row.revenue === 0 && row.sales === 0 ? (
+                    <p className="text-white/50">No sales</p>
+                  ) : (
+                    <div className="space-y-0.5 text-white/80">
+                      <p className="flex justify-between gap-6"><span className="text-white/55">Revenue</span><span className="font-semibold text-white">{money(row.revenue)}</span></p>
+                      <p className="flex justify-between gap-6"><span className="text-white/55">Pairs sold</span><span className="font-semibold text-white">{row.sales.toLocaleString()}</span></p>
+                      <p className="flex justify-between gap-6"><span className="text-white/55">Customers</span><span className="font-semibold text-white">{row.customers.toLocaleString()}</span></p>
+                    </div>
+                  )}
                 </div>
-                <div className="flex items-center gap-3 text-xs text-white/65">
-                  <span className="inline-flex items-center gap-1">
-                    <span className="h-2 w-6 rounded-full bg-amber-100" />
-                    Units Sold
-                  </span>
-                  <span className="inline-flex items-center gap-1">
-                    <span className="h-2 w-6 rounded-full bg-yellow-400" />
-                    Revenue
-                  </span>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent className="rounded-b-lg bg-[#07070a] pt-2">
-              <ResponsiveContainer width="100%" height={320}>
-                <LineChart data={filteredSalesTrends} margin={{ top: 20, right: 18, left: 0, bottom: 12 }}>
-                  <CartesianGrid strokeDasharray="4 8" stroke="#24242d" vertical={false} opacity={0.75} />
-                  <XAxis
-                    dataKey="date"
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: '#d1d5db', fontSize: 12 }}
-                    dy={10}
-                  />
-                  <YAxis
-                    yAxisId="units"
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: '#e5e7eb', fontSize: 12 }}
-                    allowDecimals={false}
-                    label={{ value: 'Units Sold', angle: -90, position: 'insideLeft', fill: '#e5e7eb', fontSize: 12 }}
-                    width={48}
-                  />
-                  <YAxis
-                    yAxisId="revenue"
-                    orientation="right"
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: '#facc15', fontSize: 12 }}
-                    tickFormatter={(value) => moneyCompact(Number(value)).replace('PHP ', '')}
-                    width={64}
-                  />
-                  <Tooltip
-                    cursor={{ stroke: '#facc15', strokeWidth: 1, strokeDasharray: '4 4', opacity: 0.35 }}
-                    contentStyle={{
-                      backgroundColor: '#16161C',
-                      border: '1px solid rgba(255, 255, 255, 0.15)',
-                      borderRadius: '12px',
-                      boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
-                      padding: '10px 14px',
-                      color: '#FFFFFF',
-                    }}
-                    labelStyle={{ color: '#FFFFFF', fontWeight: 600, fontSize: 13, marginBottom: 4 }}
-                    itemStyle={{ color: '#FFFFFF', fontSize: 12, fontWeight: 500 }}
-                    formatter={(value, name) => (String(name).includes('Revenue') || String(name).includes('Period') ? [money(Number(value)), name] : [Number(value).toLocaleString(), name])}
-                  />
-                  <Line
-                    yAxisId="units"
-                    type="monotone"
-                    dataKey="sales"
-                    stroke="#fef3c7"
-                    strokeWidth={3}
-                    dot={{ r: 4, fill: '#1f1b24', stroke: '#fef3c7', strokeWidth: 2 }}
-                    activeDot={{ r: 7, fill: '#fef3c7', stroke: '#1f1b24', strokeWidth: 3 }}
-                    name="Units Sold"
-                  />
-                  <Line
-                    yAxisId="revenue"
-                    type="monotone"
-                    dataKey="revenue"
-                    stroke="#facc15"
-                    strokeWidth={4}
-                    dot={{ r: 4, fill: '#1f1b24', stroke: '#facc15', strokeWidth: 2 }}
-                    activeDot={{ r: 7, fill: '#facc15', stroke: '#1f1b24', strokeWidth: 3 }}
-                    name="Revenue (PHP)"
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
+              );
+            };
+
+            return (
+              <Card className="bg-[#0b0b0f] border-[#24242d]">
+                <CardHeader>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <CardTitle className="text-yellow-300 flex items-center gap-2">
+                        <TrendingUp className="w-5 h-5" />
+                        Sales Performance Over Time
+                      </CardTitle>
+                      <p className="mt-1 text-sm text-white/55">
+                        {isRevenue ? 'Revenue' : 'Pairs sold'} per {bucketNoun} · {selectedRangeLabel}
+                      </p>
+                    </div>
+                    <div className="inline-flex rounded-lg border border-[#24242d] bg-[#07070a] p-0.5" role="group" aria-label="Chart measure">
+                      {([['revenue', 'Revenue'], ['pairs', 'Pairs sold']] as const).map(([id, label]) => (
+                        <button
+                          key={id}
+                          type="button"
+                          onClick={() => setTrendMetric(id)}
+                          aria-pressed={trendMetric === id}
+                          className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                            trendMetric === id ? 'bg-yellow-400 text-red-950' : 'text-white/65 hover:text-yellow-200'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    {[
+                      { label: `Total ${isRevenue ? 'revenue' : 'pairs'}`, value: formatValue(total) },
+                      { label: `Average per ${bucketNoun}`, value: isRevenue ? money(average) : `${average.toFixed(1)} pairs` },
+                      { label: `Best ${bucketNoun}`, value: peak && valueOf(peak) > 0 ? `${peak.date} · ${formatValue(valueOf(peak))}` : '—' },
+                      { label: `${bucketNoun[0].toUpperCase()}${bucketNoun.slice(1)}s with no sales`, value: `${emptyBuckets} of ${points.length}` },
+                    ].map((stat) => (
+                      <div key={stat.label} className="rounded-lg border border-[#24242d] bg-[#07070a] px-3 py-2">
+                        <p className="text-[11px] uppercase tracking-wide text-white/45">{stat.label}</p>
+                        <p className="mt-0.5 truncate text-sm font-semibold text-white" title={stat.value}>{stat.value}</p>
+                      </div>
+                    ))}
+                  </div>
+                </CardHeader>
+                <CardContent className="rounded-b-lg bg-[#07070a] pt-4">
+                  <ResponsiveContainer width="100%" height={300}>
+                    <LineChart data={points} margin={{ top: 24, right: 24, left: 4, bottom: 8 }}>
+                      <CartesianGrid stroke="#1c1c24" vertical={false} />
+                      <XAxis
+                        dataKey="date"
+                        axisLine={{ stroke: '#2a2a33' }}
+                        tickLine={false}
+                        tick={{ fill: '#9ca3af', fontSize: 12 }}
+                        minTickGap={20}
+                        tickMargin={8}
+                      />
+                      <YAxis
+                        axisLine={false}
+                        tickLine={false}
+                        tick={{ fill: '#9ca3af', fontSize: 12 }}
+                        allowDecimals={false}
+                        tickFormatter={(value) => shortAmount(Number(value))}
+                        domain={[0, yTicks[4]]}
+                        ticks={yTicks}
+                        width={56}
+                      />
+                      <Tooltip content={<TrendTooltip />} cursor={{ stroke: '#facc15', strokeWidth: 1, strokeDasharray: '4 4', opacity: 0.4 }} />
+                      {average > 0 && (
+                        <ReferenceLine
+                          y={average}
+                          stroke="#6b7280"
+                          strokeDasharray="4 4"
+                          label={{ value: `Avg ${isRevenue ? shortAmount(average) : average.toFixed(1)}`, position: 'insideTopRight', fill: '#9ca3af', fontSize: 11 }}
+                        />
+                      )}
+                      <Line
+                        type="linear"
+                        dataKey={isRevenue ? 'revenue' : 'sales'}
+                        stroke="#facc15"
+                        strokeWidth={2}
+                        dot={showDots ? { r: 4, fill: '#07070a', stroke: '#facc15', strokeWidth: 2 } : false}
+                        activeDot={{ r: 6, fill: '#facc15', stroke: '#07070a', strokeWidth: 2 }}
+                        name={isRevenue ? 'Revenue' : 'Pairs sold'}
+                        isAnimationActive={false}
+                      />
+                      {peak && valueOf(peak) > 0 && (
+                        <ReferenceDot
+                          x={peak.date}
+                          y={valueOf(peak)}
+                          r={0}
+                          label={{
+                            value: `Peak ${shortAmount(valueOf(peak))}`,
+                            position: peakLabelPosition,
+                            offset: 10,
+                            fill: '#e5e7eb',
+                            fontSize: 11,
+                            fontWeight: 600,
+                          }}
+                        />
+                      )}
+                    </LineChart>
+                  </ResponsiveContainer>
+                </CardContent>
+              </Card>
+            );
+          })()}
         </div>
       )}
 
