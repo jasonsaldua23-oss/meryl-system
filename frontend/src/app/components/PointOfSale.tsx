@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Badge } from "./ui/badge";
@@ -18,6 +18,7 @@ import { logAuditEvent } from "../../lib/api/audit-logger";
 import { supabase } from "../../lib/supabase";
 import { cleanProductImageUrl } from "../../lib/image-utils";
 import { formatStoreDateTime, storeDateDigits, storeToday } from "../../lib/datetime";
+import { isPromotionLive, promotionTargetMatches } from "../../lib/promotion-rules";
 import merylLogoBw from "../../assets/Meryl_Logo_BW.svg";
 
 type CartItem = {
@@ -604,19 +605,22 @@ export function PointOfSale() {
     return map;
   }, [productsQuery.data]);
 
+  // Re-check promotion windows every minute so a 5 PM promo starts at 5 PM
+  // even if nothing else on the page changes.
+  const [promoClock, setPromoClock] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setPromoClock(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+
   const activePromotionRules = useMemo<ActivePromotionRule[]>(() => {
     const rows = (promotionsQuery.data as any[]) ?? [];
-    const today = storeToday();
     return rows
       .map((row) => {
-        const status = String(row.status ?? "").toLowerCase();
-        if (status === "inactive" || status === "deactivated") return null;
+        // Start and end times count, not just dates; staff-deactivated promos never apply.
+        if (!isPromotionLive(row, promoClock)) return null;
         const startDate = String(row.start_date ?? "").slice(0, 10);
         const endDate = String(row.end_date ?? "").slice(0, 10);
-        const withinWindow = (!startDate || startDate <= today) && (!endDate || endDate >= today);
-        const isEffectivelyActive = status.includes("active") || withinWindow;
-        const isExpired = status.includes("expired") || (Boolean(endDate) && endDate < today);
-        if (!isEffectivelyActive || isExpired) return null;
 
         const parsedTarget = parsePromotionTarget(
           row.target_products ??
@@ -638,7 +642,7 @@ export function PointOfSale() {
         } as ActivePromotionRule;
       })
       .filter(Boolean) as ActivePromotionRule[];
-  }, [promotionsQuery.data]);
+  }, [promotionsQuery.data, promoClock]);
 
   const productGroups: ProductGroup[] = useMemo(
     () =>
@@ -666,11 +670,10 @@ export function PointOfSale() {
         .map((v) => ({ ...v }))
     : [];
 
-  const productMatchesPromotion = (promo: ActivePromotionRule, productNameLower: string, categoryLower: string) => {
-    const matchesProduct = promo.products.includes(productNameLower);
-    const matchesCategory = categoryLower ? promo.categories.includes(categoryLower) : false;
-    return promo.appliesToAll || matchesProduct || matchesCategory;
-  };
+  // Listed products are the target (a listed category only narrows them), matching
+  // the Promotions page; previously any product in the category got the discount.
+  const productMatchesPromotion = (promo: ActivePromotionRule, productNameLower: string, categoryLower: string) =>
+    promotionTargetMatches(promo, productNameLower, categoryLower);
 
   const recalculatePromotions = (items: CartItem[]) => {
     const withPromo = items.map((item) => {

@@ -120,10 +120,9 @@ function getPromotionStatusForWindow(startDate?: string, endDate?: string): Prom
 }
 
 function toDbStatusForWindow(startDate?: string, endDate?: string) {
-  const status = getPromotionStatusForWindow(startDate, endDate);
-  if (status === 'Ended') return 'expired';
-  if (status === 'Active') return 'active';
-  return 'inactive';
+  // "inactive" is reserved for promotions switched off by staff. Upcoming ones are
+  // saved as enabled ("active") so they start by themselves when their window opens.
+  return getPromotionStatusForWindow(startDate, endDate) === 'Ended' ? 'expired' : 'active';
 }
 
 function toLocalDateTimeInput(date = new Date()) {
@@ -275,10 +274,18 @@ function estimatePromotionPrice(srp: number, discountType: string | undefined, d
   if (type.includes("percent") || type.includes("bogo")) {
     return Math.max(0, srp * (1 - value / 100));
   }
-  if (type.includes("fixed") || type.includes("bundle")) {
+  if (type.includes("bundle")) {
+    return Math.max(0, srp * (1 - bundlePercent(value) / 100));
+  }
+  if (type.includes("fixed")) {
     return Math.max(0, srp - value);
   }
   return srp;
+}
+
+/** Bundle discount percent as applied by the POS (values under 5 fall back to 10%). */
+function bundlePercent(value: number) {
+  return Math.max(0, Math.min(100, value >= 5 ? value : 10));
 }
 
 function maxSafePercentageDiscount(product: { srp: number; unitCost: number; isSlowMover?: boolean }, fallback = 5) {
@@ -381,18 +388,11 @@ function deriveTargetProductsFromLinks(row: any) {
     if (productName) products.add(productName);
     if (categoryName) categories.add(categoryName);
   });
-  if (!categories.size && !products.size) return 'All Products';
-  const categoryList = Array.from(categories);
-  const productList = Array.from(products);
-
-  // Keep table labels concise: prefer category summary when links include category coverage.
-  if (categoryList.length > 0) {
-    return `Categories: ${categoryList.join(', ')}`;
-  }
-  if (productList.length <= 3) {
-    return `Products: ${productList.join(', ')}`;
-  }
-  return `Products: ${productList.slice(0, 3).join(', ')} +${productList.length - 3} more`;
+  if (!products.size) return 'All Products';
+  // Links point at individual products, so describe them as products. (Summarising
+  // them as categories made the POS discount whole categories; truncating the list
+  // with "+N more" broke matching.)
+  return `Products: ${Array.from(products).join(', ')}`;
 }
 
 function normalizeRecommendationTitle(value: string | undefined) {
@@ -742,7 +742,7 @@ export function PromotionManagement() {
     const rows = products.map((p: any) => {
       const inventory = Array.isArray(p.inventory) ? p.inventory[0] : p.inventory;
       const stock = Number(inventory?.stock_quantity ?? 0);
-      const reorder = Number(p.reorder_level ?? inventory?.reorder_level ?? 10);
+      const reorder = Number(inventory?.reorder_level ?? p.reorder_level ?? 10);
       const sold30 = soldByProduct.get(String(p.product_id ?? '')) ?? 0;
       const velocity = sold30 / 30;
       const srp = Number(inventory?.srp ?? p.srp ?? p.selling_price ?? p.price ?? 0);
@@ -793,7 +793,7 @@ export function PromotionManagement() {
         title: `Clear overstock: ${overstock.name}`,
         rationale: `${overstock.stock} units in stock and very low movement.`,
         discount_type: 'Bundle',
-        discount_value: 1,
+        discount_value: roundedSafePercentage(overstock, 10),
         targetProducts: overstock.name,
       });
     }
@@ -1094,7 +1094,10 @@ export function PromotionManagement() {
         targetProducts: formData.targetProducts,
         start_date: formData.start_date,
         end_date: formData.end_date,
-        status: toDbStatusForWindow(formData.start_date, formData.end_date),
+        // Editing must not silently re-enable a promotion that staff switched off.
+        status: editingPromotion.status === 'Inactive'
+          ? 'inactive'
+          : toDbStatusForWindow(formData.start_date, formData.end_date),
       } as any;
 
       try {
@@ -1719,7 +1722,7 @@ export function PromotionManagement() {
                       <TableCell className="text-yellow-300 whitespace-nowrap text-center align-middle font-semibold">
                         {promotion.discount_type === 'Percentage' ? `${promotion.discount_value}%` :
                          promotion.discount_type === 'Fixed Amount' ? `₱${promotion.discount_value}` :
-                         promotion.discount_type === 'BOGO' ? 'Buy 1 Get 1' : 'Bundle'}
+                         promotion.discount_type === 'BOGO' ? 'Buy 1 Get 1' : `Bundle ${bundlePercent(Number(promotion.discount_value || 0))}%`}
                       </TableCell>
                       <TableCell className="text-zinc-200 text-sm text-center align-middle">
                         <div className="leading-tight">
@@ -1946,6 +1949,7 @@ function PromotionForm({ formData, setFormData, categoryOptions, productOptions 
   const isBogoType = String(formData.discount_type ?? '').toLowerCase().includes('bogo');
   const isFixedAmountType = String(formData.discount_type ?? '').toLowerCase().includes('fixed');
   const isPercentageType = String(formData.discount_type ?? '').toLowerCase().includes('percent');
+  const isBundleType = String(formData.discount_type ?? '').toLowerCase().includes('bundle');
   const parsed = useMemo(() => parseTargetProducts(formData.targetProducts), [formData.targetProducts]);
   const [selectedCategories, setSelectedCategories] = useState<string[]>(parsed.categories);
   const [selectedProducts, setSelectedProducts] = useState<string[]>(parsed.products);
@@ -2068,7 +2072,7 @@ function PromotionForm({ formData, setFormData, categoryOptions, productOptions 
         </div>
         <div className="space-y-2">
           <Label htmlFor="discount_value" className="text-yellow-300">
-            {isFixedAmountType ? 'Discount Value (PHP amount) *' : 'Discount Value *'}
+            {isFixedAmountType ? 'Discount Value (PHP amount) *' : isBundleType ? 'Bundle Discount (% off each item) *' : isPercentageType ? 'Discount Value (%) *' : 'Discount Value *'}
           </Label>
           <Input
             id="discount_value"
@@ -2081,7 +2085,7 @@ function PromotionForm({ formData, setFormData, categoryOptions, productOptions 
                 ? 'Auto for BOGO (default 50)'
                 : isFixedAmountType
                   ? 'e.g. 500 for ₱500 off'
-                  : isPercentageType
+                  : isPercentageType || isBundleType
                     ? 'e.g. 15 for 15% off'
                     : 'Enter discount'
             }
@@ -2089,6 +2093,8 @@ function PromotionForm({ formData, setFormData, categoryOptions, productOptions 
           />
           {isFixedAmountType ? (
             <p className="text-xs text-yellow-300/80">Example: enter <span className="text-yellow-300">500</span> to deduct <span className="text-yellow-300">₱500</span> from each qualifying item.</p>
+          ) : isBundleType ? (
+            <p className="text-xs text-yellow-300/80">Percent off each bundled item. Values below 5 are applied as 10%.</p>
           ) : null}
         </div>
       </div>
