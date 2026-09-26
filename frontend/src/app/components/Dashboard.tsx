@@ -4,6 +4,7 @@ import { TrendingUp, Package, Coins, Users, AlertCircle, ArrowUpRight, ArrowDown
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, CartesianGrid, BarChart, Bar, Cell, LabelList, YAxis } from "recharts";
 import { useCustomers, useProducts, useSales } from "../../lib/hooks";
 import { supabase } from "../../lib/supabase";
+import { parseDbTimestamp } from "../../lib/datetime";
 
 function formatPeso(value: number) {
   return new Intl.NumberFormat("en-PH", {
@@ -14,9 +15,8 @@ function formatPeso(value: number) {
 }
 
 function shortDate(value: string | null | undefined) {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "-";
+  const date = parseDbTimestamp(value);
+  if (!date) return "-";
   return date.toLocaleDateString("en-PH", { month: "short", day: "numeric" });
 }
 
@@ -80,7 +80,7 @@ export function Dashboard() {
       .map((s) => {
         const amount = Number(s.total_amount ?? 0);
         const rawDate = s.transaction_date ?? s.created_at ?? null;
-        const date = rawDate ? new Date(rawDate) : null;
+        const date = parseDbTimestamp(rawDate);
         const payment = Array.isArray((s as any).payment) ? (s as any).payment[0] : (s as any).payment;
         const paymentStatus = payment?.payment_status ?? null;
         return {
@@ -125,7 +125,7 @@ export function Dashboard() {
     const customerNewCount = customers.filter((c) => {
       const rawDate = c.created_at ?? c.date_registered ?? null;
       if (!rawDate) return false;
-      const date = new Date(rawDate);
+      const date = parseDbTimestamp(rawDate) ?? new Date(NaN);
       return !Number.isNaN(date.getTime()) && date.getMonth() === currentMonth && date.getFullYear() === currentYear;
     }).length;
 

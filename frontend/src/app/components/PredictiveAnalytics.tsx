@@ -20,6 +20,7 @@ import {
 } from "recharts";
 import { useCustomers, useProducts, usePromotions, useReturns, useSales } from "../../lib/hooks";
 import { productAnalyticsSnapshotsApi } from "../../lib/api";
+import { localDateKey } from "../../lib/datetime";
 
 type RevenueTrendPeriod = "daily" | "weekly" | "monthly" | "quarterly" | "annually";
 type ProductAnalyticsPeriod = RevenueTrendPeriod | "custom";
@@ -537,7 +538,7 @@ export function PredictiveAnalytics() {
         segment.revenue += getSaleAmount(sale);
       }
 
-      const dayKey = date.toISOString().slice(0, 10);
+      const dayKey = localDateKey(date);
       const day = dailySales.get(dayKey) ?? { date, revenue: 0, units: 0 };
       day.revenue += getSaleAmount(sale);
 
@@ -755,13 +756,13 @@ export function PredictiveAnalytics() {
       dailyRows
         .filter((row) => row.date >= start)
         .forEach((row) => {
-        let key = row.date.toISOString().slice(0, 10);
+        let key = localDateKey(row.date);
         let label = formatShortDate(row.date);
         let bucketDate = new Date(row.date);
 
         if (period === "weekly") {
           bucketDate = startOfWeek(row.date);
-          key = bucketDate.toISOString().slice(0, 10);
+          key = localDateKey(bucketDate);
           label = labelForPeriodDate(bucketDate, period);
         } else if (period === "monthly") {
           bucketDate = new Date(row.date.getFullYear(), row.date.getMonth(), 1);
@@ -802,7 +803,7 @@ export function PredictiveAnalytics() {
     const dailyModelDays = countDaysInclusive(dailyModelStart, now);
     const dailyModelRows = Array.from({ length: dailyModelDays }, (_, index) => {
       const date = addDays(dailyModelStart, index);
-      const key = date.toISOString().slice(0, 10);
+      const key = localDateKey(date);
       const existing = dailySales.get(key);
       return {
         date,
@@ -1037,7 +1038,7 @@ export function PredictiveAnalytics() {
       }, 0),
       1,
     );
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localDateKey(new Date());
 
     const promotionPerformance = promotions
       .map((promo: any, index: number) => {

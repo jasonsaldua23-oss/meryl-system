@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { formatStoreDate, formatStoreDateTime, parseDbTimestamp, recordMoment, storeDateDigits } from "../lib/datetime";
+import { formatStoreDate, formatStoreDateTime, localDateKey, parseDbTimestamp, recordMoment, storeDateDigits } from "../lib/datetime";
+
+describe("localDateKey", () => {
+  it("keeps local midnight on its own calendar day (toISOString would move it back in UTC+8)", () => {
+    expect(localDateKey(new Date(2026, 8, 25, 0, 0, 0))).toBe("2026-09-25");
+    expect(localDateKey(new Date(2026, 8, 25, 23, 59, 59))).toBe("2026-09-25");
+    expect(localDateKey(new Date(2026, 9, 1))).toBe("2026-10-01");
+  });
+
+  it("parses date-only database values instead of dropping them", () => {
+    expect(parseDbTimestamp("2026-09-25")).not.toBeNull();
+  });
+});
 
 describe("parseDbTimestamp", () => {
   it("treats timestamps without a zone as UTC (Postgres now())", () => {

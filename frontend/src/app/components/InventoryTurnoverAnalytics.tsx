@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { AlertCircle, TrendingUp, Package, Zap, Download } from "lucide-react";
 import { inventoryAnalyticsApi, type InventoryTurnoverContext, type InventoryProduct } from "../../lib/api/inventoryAnalytics";
 import { toast } from "sonner";
+import { localDateKey } from "../../lib/datetime";
 
 function formatPeso(value: number) {
   return new Intl.NumberFormat("en-PH", {
@@ -184,7 +185,7 @@ export function InventoryTurnoverAnalytics() {
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = `inventory-turnover-${new Date().toISOString().split("T")[0]}.csv`;
+    link.download = `inventory-turnover-${localDateKey(new Date())}.csv`;
     link.click();
     toast.success("Report exported successfully");
   };

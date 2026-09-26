@@ -9,6 +9,7 @@ import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, L
 import { toast } from 'sonner';
 import { useProducts, useSales } from '../../lib/hooks';
 import { shortId } from './ui/utils';
+import { localDateKey as localDayKey, parseDbTimestamp } from '../../lib/datetime';
 
 function isCompletedSale(sale: any) {
   const payment = Array.isArray(sale.payment) ? sale.payment[0] : sale.payment;
@@ -17,10 +18,7 @@ function isCompletedSale(sale: any) {
 }
 
 function saleDate(sale: any) {
-  const raw = String(sale.transaction_date ?? sale.created_at ?? '').trim();
-  const hasTimezone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(raw);
-  const date = new Date(hasTimezone ? raw : `${raw}Z`);
-  return Number.isNaN(date.getTime()) ? null : date;
+  return parseDbTimestamp(sale.transaction_date ?? sale.created_at);
 }
 
 function money(value: number) {
@@ -736,7 +734,7 @@ export function ReportsAnalytics() {
       if (!date || date < start || date > now) return;
 
       const rawId = String(sale.receipt_number ?? sale.display_sales_id ?? sale.sales_id ?? sale.id ?? '').trim();
-      const dateDigits = date ? date.toISOString().slice(0, 10).replace(/-/g, '') : '20260920';
+      const dateDigits = date ? localDayKey(date).replace(/-/g, '') : localDayKey(new Date()).replace(/-/g, '');
       const cleanSuffix = rawId ? rawId.replace(/[^a-zA-Z0-9]/g, '').slice(-4).toUpperCase() : '0001';
       const saleId = sale.receipt_number || (rawId && (rawId.startsWith('RCP-') || rawId.startsWith('SLS-') || rawId.startsWith('TXN-')) ? rawId : `RCP-${dateDigits}-${cleanSuffix || '0001'}`);
       const customer = String(sale.customer_name ?? sale.customer?.name ?? 'Walk-in Customer');
@@ -1273,7 +1271,7 @@ export function ReportsAnalytics() {
     const getBreakdownKey = (date: Date) => {
       if (salesBreakdownPeriod === 'monthly') {
         return {
-          key: date.toISOString().slice(0, 7),
+          key: localDayKey(date).slice(0, 7),
           label: date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
           date: new Date(date.getFullYear(), date.getMonth(), 1),
         };
@@ -1310,7 +1308,7 @@ export function ReportsAnalytics() {
       }
 
       return {
-        key: date.toISOString().slice(0, 10),
+        key: localDayKey(date),
         label: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
         date,
       };
@@ -2205,7 +2203,7 @@ export function ReportsAnalytics() {
           lines.push(formatRow(['Date', 'Sale ID', 'Customer', 'Size', 'Color', 'Quantity', 'Unit Price (PHP)', 'Subtotal (PHP)', 'Payment Method']));
           shoeDetailReport.transactions.forEach((tx) => {
             lines.push(formatRow([
-              tx.date.toISOString().slice(0, 10),
+              localDayKey(tx.date),
               tx.saleId,
               tx.customer,
               tx.size,
@@ -2434,8 +2432,8 @@ export function ReportsAnalytics() {
                   const now = new Date();
                   const past = new Date();
                   past.setDate(now.getDate() - 30);
-                  setCustomStartDate(past.toISOString().split('T')[0]);
-                  setCustomEndDate(now.toISOString().split('T')[0]);
+                  setCustomStartDate(localDayKey(past));
+                  setCustomEndDate(localDayKey(now));
                 }
               }}
             >

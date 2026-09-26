@@ -79,6 +79,20 @@ export function storeDateDigits(date: Date | null | undefined = new Date()): str
   return formatStoreDate(date ?? new Date()).replace(/-/g, "");
 }
 
+/**
+ * YYYY-MM-DD from the device's local calendar. Use this (not toISOString,
+ * which is UTC) for day/month buckets built with local Date math
+ * (setHours(0,0,0,0), new Date(y, m, d)); in the Philippines toISOString moves
+ * local midnight to the previous day.
+ */
+export function localDateKey(date: Date): string {
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-");
+}
+
 /** Today's date (YYYY-MM-DD) in store time. */
 export function storeToday(): string {
   return formatStoreDate(new Date());
