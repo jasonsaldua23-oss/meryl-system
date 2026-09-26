@@ -744,13 +744,15 @@ export function ReportsAnalytics() {
     }
     const multiDay = startOfDay(start).getTime() !== startOfDay(end).getTime();
 
+    // Hourly charts show store hours; a sale before opening or after closing
+    // (e.g. 7:45 PM) adds its own hour to the chart so no sale goes missing.
+    const from = mode === 'hourly' ? startOfDay(start) : start;
+    const to = mode === 'hourly' ? endOfDay(end) : end;
     salesRows.forEach((sale) => {
       const date = saleDate(sale);
-      if (!date || date < start || date > end) return;
+      if (!date || date < from || date > to) return;
       const bucket = bucketStartForDate(date, mode);
       const key = String(bucket.getTime());
-      // Hourly charts cover store hours only; off-hours sales are listed in the Sales Breakdown.
-      if (mode === 'hourly' && !grouped.has(key)) return;
       const prev = grouped.get(key) ?? { sales: 0, revenue: 0, customers: new Set<string>(), firstDate: bucket };
       const details = Array.isArray(sale.sales_details) ? sale.sales_details : [];
       details.forEach((detail: any) => {
