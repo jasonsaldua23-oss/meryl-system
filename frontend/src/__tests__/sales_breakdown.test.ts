@@ -10,14 +10,19 @@ describe("Sales Breakdown periods", () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  it("daily: all 24 hours of today, contiguous", () => {
-    const { slots, unit } = buildBreakdownSlots("daily", undefined, undefined, NOW);
+  it("daily: store hours 7:30 AM - 7:30 PM in 12 hourly slots, plus off-hours catch-alls", () => {
+    const { slots, unit, rangeLabel } = buildBreakdownSlots("daily", undefined, undefined, NOW);
     expect(unit).toBe("hour");
-    expect(slots).toHaveLength(24);
-    expect(slots[0].start).toEqual(new Date(2026, 8, 26, 0));
-    expect(slots[0].label).toBe("12 AM – 1 AM");
-    expect(slots[14].label).toBe("2 PM – 3 PM");
-    expect(slots[23].end).toEqual(new Date(2026, 8, 26, 23, 59, 59, 999));
+    const storeSlots = slots.filter((slot) => !slot.offHours);
+    expect(storeSlots).toHaveLength(12);
+    expect(storeSlots[0].label).toBe("7:30 AM – 8:30 AM");
+    expect(storeSlots[0].start).toEqual(new Date(2026, 8, 26, 7, 30));
+    expect(storeSlots[11].label).toBe("6:30 PM – 7:30 PM");
+    expect(storeSlots[11].end).toEqual(new Date(2026, 8, 26, 19, 29, 59, 999));
+    expect(rangeLabel).toBe("Store hours 7:30 AM – 7:30 PM, Sep 26, 2026");
+    // The whole calendar day is covered, so no sale is lost.
+    expect(slots[0].start).toEqual(new Date(2026, 8, 26, 0, 0));
+    expect(slots[slots.length - 1].end).toEqual(new Date(2026, 8, 26, 23, 59, 59, 999));
     slots.slice(1).forEach((slot, i) => expect(slot.start.getTime()).toBe(slots[i].end.getTime() + 1));
   });
 

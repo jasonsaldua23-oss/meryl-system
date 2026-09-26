@@ -331,6 +331,22 @@ function ChartWhiteTooltip({ active, payload, label }: any) {
   );
 }
 
+/** Store operating hours: the Daily view runs 7:30 AM - 7:30 PM in hourly steps. */
+export const STORE_HOURS = { open: { hour: 7, minute: 30 }, close: { hour: 19, minute: 30 } };
+
+function storeOpening(day: Date) {
+  return new Date(day.getFullYear(), day.getMonth(), day.getDate(), STORE_HOURS.open.hour, STORE_HOURS.open.minute);
+}
+
+function storeClosing(day: Date) {
+  return new Date(day.getFullYear(), day.getMonth(), day.getDate(), STORE_HOURS.close.hour, STORE_HOURS.close.minute);
+}
+
+/** e.g. "7:30 AM" (minutes shown only when not on the hour). */
+function clockLabel(date: Date) {
+  return date.toLocaleTimeString("en-US", { hour: "numeric", ...(date.getMinutes() ? { minute: "2-digit" } : {}) });
+}
+
 type TrendBucketMode = 'hourly' | 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'annually';
 
 function startOfDay(date: Date) {
@@ -366,7 +382,11 @@ function trendBucketMode(timeRange: ReportPeriod, days: number): TrendBucketMode
 }
 
 function bucketStartForDate(date: Date, mode: TrendBucketMode) {
-  if (mode === 'hourly') return new Date(date.getFullYear(), date.getMonth(), date.getDate(), date.getHours());
+  if (mode === 'hourly') {
+    const offset = STORE_HOURS.open.minute;
+    const aligned = new Date(date.getFullYear(), date.getMonth(), date.getDate(), date.getHours(), offset);
+    return aligned > date ? new Date(aligned.getTime() - 3600000) : aligned;
+  }
   const copy = startOfDay(date);
   if (mode === 'weekly') return weekStartSunday(copy);
   if (mode === 'monthly') return new Date(copy.getFullYear(), copy.getMonth(), 1);
@@ -387,7 +407,7 @@ function nextBucketStart(date: Date, mode: TrendBucketMode) {
 }
 
 function trendBucketLabel(bucket: Date, mode: TrendBucketMode) {
-  if (mode === 'hourly') return bucket.toLocaleTimeString('en-US', { hour: 'numeric' });
+  if (mode === 'hourly') return clockLabel(bucket);
   if (mode === 'weekly') {
     const end = new Date(bucket);
     end.setDate(bucket.getDate() + 6);
@@ -419,8 +439,8 @@ function salesTrendFrameUncapped(timeRange: ReportPeriod, customStartDate?: stri
   const baseEnd = window.now;
 
   if (timeRange === 'daily') {
-    // One day: chart it hour by hour.
-    return { start: startOfDay(window.start), end: endOfDay(window.start), mode: 'hourly' as TrendBucketMode };
+    // One day: chart store hours (7:30 AM - 7:30 PM) hour by hour.
+    return { start: storeOpening(window.start), end: new Date(storeClosing(window.start).getTime() - 1), mode: 'hourly' as TrendBucketMode };
   }
 
   if (timeRange === 'weekly') {
@@ -457,13 +477,12 @@ export function buildBreakdownSlots(
   now: Date = new Date(),
 ) {
   const window = rangeWindow(timeRange, customStartDate, customEndDate);
-  type Slot = { label: string; start: Date; end: Date; pairs: number; gross: number; discount: number; net: number; transactions: number };
+  type Slot = { label: string; start: Date; end: Date; offHours: boolean; pairs: number; gross: number; discount: number; net: number; transactions: number };
   const slots: Slot[] = [];
-  const addSlot = (start: Date, end: Date, label: string) =>
-    slots.push({ label, start, end, pairs: 0, gross: 0, discount: 0, net: 0, transactions: 0 });
+  const addSlot = (start: Date, end: Date, label: string, offHours = false) =>
+    slots.push({ label, start, end, offHours, pairs: 0, gross: 0, discount: 0, net: 0, transactions: 0 });
   const shortDate = (date: Date, withYear = false) =>
     date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(withYear ? { year: 'numeric' } : {}) });
-  const hourLabel = (date: Date) => date.toLocaleTimeString('en-US', { hour: 'numeric' });
   const year = now.getFullYear();
   let rangeLabel = '';
   let unit = 'period';
@@ -482,12 +501,16 @@ export function buildBreakdownSlots(
 
   if (timeRange === 'daily') {
     const day = startOfDay(window.start);
-    for (let hour = 0; hour < 24; hour += 1) {
-      const start = new Date(day.getFullYear(), day.getMonth(), day.getDate(), hour);
-      const next = new Date(day.getFullYear(), day.getMonth(), day.getDate(), hour + 1);
-      addSlot(start, new Date(next.getTime() - 1), `${hourLabel(start)} – ${hourLabel(next)}`);
+    const opening = storeOpening(day);
+    const closing = storeClosing(day);
+    // Sales rung up outside store hours are kept, in their own rows (shown only if any).
+    addSlot(day, new Date(opening.getTime() - 1), `Before opening (before ${clockLabel(opening)})`, true);
+    for (let start = opening; start < closing; start = new Date(start.getTime() + 3600000)) {
+      const next = new Date(Math.min(start.getTime() + 3600000, closing.getTime()));
+      addSlot(start, new Date(next.getTime() - 1), `${clockLabel(start)} – ${clockLabel(next)}`);
     }
-    rangeLabel = `Each hour of ${shortDate(day, true)}`;
+    addSlot(closing, endOfDay(day), `After closing (after ${clockLabel(closing)})`, true);
+    rangeLabel = `Store hours ${clockLabel(opening)} – ${clockLabel(closing)}, ${shortDate(day, true)}`;
     unit = 'hour';
   } else if (timeRange === 'weekly') {
     const thisWeek = weekStartSunday(now);
@@ -1471,7 +1494,8 @@ export function ReportsAnalytics() {
       });
     });
 
-    const rows = slots.map((slot, index) => ({
+    // Off-hours rows (before opening / after closing) appear only when they have sales.
+    const rows = slots.filter((slot) => !slot.offHours || slot.transactions > 0).map((slot, index) => ({
       id: `breakdown-${index}`,
       date: slot.label,
       pairs: slot.pairs,
@@ -3080,7 +3104,8 @@ export function ReportsAnalytics() {
                         Sales Performance Over Time
                       </CardTitle>
                       <p className="mt-1 text-sm text-white/55">
-                        {isRevenue ? 'Revenue' : 'Pairs sold'} per {bucketNoun} · {selectedRangeLabel}
+                        {isRevenue ? 'Revenue' : 'Pairs sold'} per {bucketNoun}
+                        {bucketMode === 'hourly' ? ` · store hours ${clockLabel(storeOpening(new Date()))} – ${clockLabel(storeClosing(new Date()))}` : ''} · {selectedRangeLabel}
                       </p>
                     </div>
                     <div className="inline-flex rounded-lg border border-[#24242d] bg-[#07070a] p-0.5" role="group" aria-label="Chart measure">
