@@ -47,13 +47,16 @@ function RouteLoader({ children }: { children: React.ReactNode }) {
 function RouteErrorFallback() {
   const error = useRouteError() as Error;
   const message = String(error?.message ?? 'The app could not load this page.');
+  const isChunkError = /Failed to fetch dynamically imported module|Importing a module script failed|Loading chunk|dynamically imported module/i.test(message);
 
   return (
     <div className="min-h-screen bg-[#0E0E12] text-white flex items-center justify-center p-6">
       <div className="max-w-md rounded-2xl border border-white/10 bg-[#16161C] p-6 shadow-2xl">
-        <h1 className="text-xl font-semibold text-white">Page needs a refresh</h1>
+        <h1 className="text-xl font-semibold text-white">{isChunkError ? 'Page needs a refresh' : 'Something went wrong'}</h1>
         <p className="mt-2 text-sm text-white/60">
-          A newer version of Meryl System was deployed. Refreshing loads the latest portal files.
+          {isChunkError
+            ? 'A newer version of Meryl System was deployed. Refreshing loads the latest portal files.'
+            : 'This page hit an unexpected error. Refreshing usually fixes it; your saved data is not affected.'}
         </p>
         <p className="mt-4 rounded-lg bg-black/30 p-3 text-xs text-white/50 break-words">{message}</p>
         <button

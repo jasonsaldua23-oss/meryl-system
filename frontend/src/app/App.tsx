@@ -20,6 +20,8 @@ function hasVisibleModal() {
     const style = window.getComputedStyle(node);
     const rect = node.getBoundingClientRect();
 
+    // An opening dialog starts at opacity 0 (zoom-in animation).
+    if (node.dataset.state === 'open') return true;
     return (
       node.dataset.state !== 'closed' &&
       style.display !== 'none' &&
@@ -29,6 +31,14 @@ function hasVisibleModal() {
       rect.height > 0
     );
   });
+}
+
+/**
+ * Nodes React still renders must never be removed by hand: React would crash
+ * later with "Failed to execute 'removeChild' on 'Node'" when it unmounts them.
+ */
+function isReactManaged(node: Element) {
+  return Object.keys(node).some((key) => key.startsWith('__reactFiber$') || key.startsWith('__reactProps$'));
 }
 
 function unlockStuckUi() {
@@ -46,7 +56,7 @@ function unlockStuckUi() {
 
     document.querySelectorAll(overlaySelector).forEach((element) => {
       const node = element as HTMLElement;
-      if (node.hasAttribute('data-lock-screen') || node.closest('[data-lock-screen]')) {
+      if (node.hasAttribute('data-lock-screen') || node.closest('[data-lock-screen]') || isReactManaged(node)) {
         return;
       }
       const style = window.getComputedStyle(node);

@@ -53,9 +53,19 @@ function clearOrphanedModalState() {
     );
   };
 
-  const visibleDialog = Array.from(document.querySelectorAll(dialogSelector)).find(isVisible);
+  // An opening dialog starts at opacity 0 (zoom-in animation), so an "open"
+  // state counts as visible too.
+  const visibleDialog = Array.from(document.querySelectorAll(dialogSelector)).find(
+    (node) => isVisible(node) || node.getAttribute('data-state') === 'open',
+  );
 
   if (visibleDialog) return;
+
+  // Only delete leftovers React no longer tracks. Removing a node React still
+  // renders (e.g. the notification popup backdrop) makes React crash later with
+  // "Failed to execute 'removeChild' on 'Node'".
+  const isReactManaged = (node: Element) =>
+    Object.keys(node).some((key) => key.startsWith('__reactFiber$') || key.startsWith('__reactProps$'));
 
   document
     .querySelectorAll(
@@ -69,12 +79,14 @@ function clearOrphanedModalState() {
         '.fixed.inset-0.z-50',
       ].join(', '),
     )
-    .forEach((node) => node.remove());
+    .forEach((node) => {
+      if (!isReactManaged(node)) node.remove();
+    });
 
   document
     .querySelectorAll(dialogSelector)
     .forEach((node) => {
-      if (!isVisible(node)) {
+      if (!isVisible(node) && !isReactManaged(node)) {
         node.remove();
       }
     });
