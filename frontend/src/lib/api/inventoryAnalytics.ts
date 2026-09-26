@@ -1,4 +1,4 @@
-import { supabase } from "../supabase";
+import { BACKEND_BASE, getBackendAuthHeaders } from "../auth-context";
 
 export interface InventoryProduct {
   product_id: string;
@@ -46,7 +46,7 @@ export interface InventoryTurnoverContext {
   analysis_period: string;
 }
 
-const FLASK_API_BASE = import.meta.env.VITE_API_URL || "http://localhost:5000";
+const FLASK_API_BASE = BACKEND_BASE;
 
 export const inventoryAnalyticsApi = {
   /**
@@ -54,12 +54,12 @@ export const inventoryAnalyticsApi = {
    */
   fetchTurnoverAnalytics: async (): Promise<InventoryTurnoverContext> => {
     try {
-      const token = (await supabase.auth.getSession()).data.session?.access_token;
       const response = await fetch(`${FLASK_API_BASE}/api/analytics/inventory-turnover`, {
         method: "GET",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
-          ...(token && { Authorization: `Bearer ${token}` }),
+          ...(await getBackendAuthHeaders()),
         },
       });
 

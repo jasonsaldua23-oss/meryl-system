@@ -109,8 +109,9 @@ export async function logAuditEvent(entry: {
 
     const { error } = await supabase.from("audit_log").insert(payload);
     if (error) {
-      // Table may not exist yet or RPC alternative
-      await supabase.rpc("write_audit_log", {
+      // Table may not exist yet or RPC alternative. Query builders are
+      // thenables without .catch(), so errors are read from the result.
+      await (supabase as any).rpc("write_audit_log", {
         p_actor_user_id: payload.actor_user_id || null,
         p_action_type: payload.action_type,
         p_entity_type: payload.entity_type,
@@ -118,7 +119,7 @@ export async function logAuditEvent(entry: {
         p_old_data: payload.old_data,
         p_new_data: payload.new_data,
         p_metadata: payload.metadata,
-      }).catch(() => null);
+      });
     }
   } catch {
     // Network or storage error: resiliently absorbed, already saved in local buffer

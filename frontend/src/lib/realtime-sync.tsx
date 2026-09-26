@@ -114,11 +114,16 @@ export function RealtimeSyncListener() {
       )
       .subscribe();
 
-    // 3. Fallback Smart Polling (runs every 10 seconds only when tab is visible)
+    // 3. Fallback Smart Polling (runs every 10 seconds only when tab is visible).
+    // Realtime change events are filtered by RLS using the Supabase JWT, so
+    // username/password sessions (identified by the x-meryl-session header)
+    // rely on this polling for cross-device updates.
+    const pollingKeys = ["sales", "inventory", "products", "customers", "returns", "promotions", "notifications"];
     const interval = setInterval(() => {
       if (typeof document !== "undefined" && document.visibilityState === "visible") {
-        queryClient.invalidateQueries({ queryKey: ["sales"], refetchType: "active" });
-        queryClient.invalidateQueries({ queryKey: ["inventory"], refetchType: "active" });
+        pollingKeys.forEach((key) => {
+          queryClient.invalidateQueries({ queryKey: [key], refetchType: "active" });
+        });
       }
     }, 10000);
 

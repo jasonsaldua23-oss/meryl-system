@@ -336,7 +336,7 @@ function formatPercentValue(value: number) {
 
 export function PointOfSale() {
   const queryClient = useQueryClient();
-  const { user, validateCredentials, setCurrentUser } = useAuth();
+  const { user, validateCredentials } = useAuth();
   const productsQuery = useProducts();
   const inventoryQuery = useInventory();
   const customersQuery = useCustomers();
@@ -963,29 +963,10 @@ export function PointOfSale() {
 
     setManagerVerifying(true);
     try {
-      let verifiedUser: any = null;
-      try {
-        const resp = await fetch("/api/auth/authorize-manager", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({
-            username: managerUsername.trim(),
-            password: managerPassword.trim(),
-          }),
-        });
-        const data = await resp.json().catch(() => null);
-        if (resp.ok && data?.ok && data?.user) {
-          verifiedUser = data.user;
-        } else if (data?.error) {
-          toast.error(data.error);
-          setManagerVerifying(false);
-          return;
-        }
-      } catch {
-        // Fallback to validateCredentials if direct endpoint is unreachable
-        verifiedUser = await validateCredentials(managerUsername.trim(), managerPassword.trim());
-      }
+      // Verify against the database without replacing the cashier's session.
+      const verifiedUser = await validateCredentials(managerUsername.trim(), managerPassword.trim(), {
+        issueSession: false,
+      });
 
       if (!verifiedUser || getRoleGroup(verifiedUser.role_name) !== "admin") {
         toast.error("Authorization failed. Administrator or Manager credentials required.");
@@ -1188,7 +1169,8 @@ export function PointOfSale() {
     if (!user?.user_id) return toast.error("No logged in user");
     if (cart.length === 0) return toast.error("Cart is empty");
 
-    const total = calculateTotal();
+    // Sum of the rounded line subtotals, exactly as the server totals the sale.
+    const total = Math.round(cart.reduce((sum, item) => sum + Number(getLineTotal(item).toFixed(2)), 0) * 100) / 100;
     const paid = paymentMethod === "Cash" ? Number(cashReceived || 0) : total;
     if (paid < total) return toast.error("Insufficient payment amount");
 
@@ -1236,31 +1218,25 @@ export function PointOfSale() {
       subtotal: Number(getLineTotal(item).toFixed(2)),
     }));
 
-    let cashierUserId = user.user_id;
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cashierUserId);
-    if (!isUuid) {
-      try {
-        const { data: userRows } = await supabase
-          .from("user")
-          .select("user_id")
-          .ilike("username", user.username || "sales")
-          .limit(1);
-        if (userRows && userRows.length > 0 && userRows[0].user_id) {
-          cashierUserId = userRows[0].user_id;
-          try {
-            setCurrentUser({ ...user, user_id: cashierUserId });
-          } catch {}
-        }
-      } catch {}
-    }
-
-    const { data, error } = await supabase.rpc("complete_sale", {
-      p_user_id: cashierUserId,
+    // The database records the signed-in cashier from the session; p_user_id is informational.
+    const saleArgs: Record<string, unknown> = {
+      p_user_id: user.user_id,
       p_customer_id,
       p_payment_method: dbPaymentMethod,
       p_amount_paid: paid,
       p_items: items,
-    });
+    };
+    if (paymentMethod === "GCash") {
+      saleArgs.p_reference_number = gcashRefNumber.replace(/\D/g, "");
+    }
+
+    const rpc = (supabase as any).rpc.bind(supabase);
+    let { data, error } = await rpc("complete_sale", saleArgs);
+    if (error?.code === "PGRST202" && "p_reference_number" in saleArgs) {
+      // Database not yet migrated to the version that stores GCash references.
+      const { p_reference_number: _ignored, ...legacyArgs } = saleArgs;
+      ({ data, error } = await rpc("complete_sale", legacyArgs));
+    }
 
     if (error) return toast.error(error.message);
 

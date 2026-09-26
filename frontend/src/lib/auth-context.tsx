@@ -8,7 +8,13 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { supabase } from "./supabase";
+import {
+  APP_SESSION_HEADER,
+  getAppSessionToken,
+  revokeAppSession,
+  setAppSessionToken,
+  supabase,
+} from "./supabase";
 import { logAuditEvent } from "./api/audit-logger";
 import {
   getStoredAvatarSync,
@@ -33,6 +39,48 @@ export const BACKEND_BASE = (
     : "")
 ).replace(/\/$/, "");
 
+/**
+ * Proof of identity for the Flask backend: the staff session token for
+ * password logins, or the Supabase access token for Google/OTP logins.
+ */
+export async function getBackendAuthHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {};
+  const appToken = getAppSessionToken();
+  if (appToken) headers[APP_SESSION_HEADER] = appToken;
+  try {
+    const { data } = await supabase.auth.getSession();
+    if (data?.session?.access_token) headers.Authorization = `Bearer ${data.session.access_token}`;
+  } catch {}
+  return headers;
+}
+
+async function syncBackendSession() {
+  try {
+    const authHeaders = await getBackendAuthHeaders();
+    if (Object.keys(authHeaders).length === 0) return;
+    await fetch(`${BACKEND_BASE}/api/auth/sync-session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders },
+      credentials: "include",
+      body: "{}",
+    });
+  } catch {}
+}
+
+async function callLoginRpc(username: string, password: string, issueSession: boolean) {
+  const rpc = (supabase as any).rpc.bind(supabase);
+  if (!issueSession) {
+    const result = await rpc("login_user", {
+      p_username: username,
+      p_password: password,
+      p_issue_session: false,
+    });
+    // Databases without the phase 4 migration only have the 2-argument version.
+    if (!result.error || result.error.code !== "PGRST202") return result;
+  }
+  return rpc("login_user", { p_username: username, p_password: password });
+}
+
 export type AuthUser = {
   user_id: string;
   name: string;
@@ -53,7 +101,11 @@ type AuthContextValue = {
   unlockTerminal: (password: string) => Promise<boolean>;
   checkLockoutStatus: (username: string) => { isLocked: boolean; remainingSeconds: number };
   login: (username: string, password: string) => Promise<AuthUser | null>;
-  validateCredentials: (username: string, password: string) => Promise<AuthUser | null>;
+  validateCredentials: (
+    username: string,
+    password: string,
+    options?: { issueSession?: boolean }
+  ) => Promise<AuthUser | null>;
   setCurrentUser: (user: AuthUser) => void;
   signInWithGoogle: () => Promise<void>;
   requestPasswordReset: (email: string) => Promise<{ ok?: boolean; message?: string } | void>;
@@ -419,17 +471,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(authUser);
 
       // Asynchronously synchronize session cookie with Python backend (Render)
-      try {
-        fetch(`${BACKEND_BASE}/api/auth/sync-session`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({
-            email: authUser.email,
-            user_id: authUser.user_id,
-          }),
-        }).catch(() => null);
-      } catch {}
+      syncBackendSession();
     }
     return authUser;
   }, []);
@@ -472,46 +514,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       });
 
-      // Verify active session with backend /api/auth/me to ensure it wasn't revoked
+      // Ask the database who this session belongs to, so revoked, expired or
+      // deactivated sessions are signed out and role/profile changes apply.
       try {
-        const meRes = await fetch(`${BACKEND_BASE}/api/auth/me`, {
-          method: "GET",
-          credentials: "include",
-        });
-        if (meRes.ok) {
-          const meData = await meRes.json();
-          if (meData?.ok && meData?.user) {
+        const { data: whoami, error: whoamiError } = await (supabase as any).rpc("app_whoami");
+        if (!whoamiError) {
+          if (whoami?.user_id && String(whoami.user_id) === String(storedUser.user_id)) {
             const updatedUser: AuthUser = {
               ...storedUser,
-              name: meData.user.name || storedUser.name,
-              role_name: meData.user.role_name || storedUser.role_name,
-              status: meData.user.status || storedUser.status,
-              avatar_url: meData.user.avatar_url || storedUser.avatar_url,
+              name: whoami.name || storedUser.name,
+              role_id: whoami.role_id || storedUser.role_id,
+              role_name: whoami.role_name || storedUser.role_name,
+              status: whoami.status || storedUser.status,
+              avatar_url: whoami.avatar_url || storedUser.avatar_url,
             };
             writeStoredUser(updatedUser);
             if (mounted) setUser(updatedUser);
-          }
-        } else if (meRes.status === 401 || meRes.status === 403) {
-          // Check if user is authenticated via Supabase (e.g. Google OAuth or Supabase session)
-          const { data: sbData } = await supabase.auth.getSession().catch(() => ({ data: { session: null } }));
-          if (!sbData?.session) {
+            syncBackendSession();
+          } else {
+            revokeAppSession();
             clearStoredUser();
             if (mounted) setUser(null);
-          } else {
-            // Re-sync session cookie with Render
-            try {
-              fetch(`${BACKEND_BASE}/api/auth/sync-session`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                credentials: "include",
-                body: JSON.stringify({
-                  email: storedUser.email,
-                  user_id: storedUser.user_id,
-                }),
-              }).catch(() => null);
-            } catch {}
           }
         }
+        // On error (offline, or the database has not been migrated yet) keep
+        // the in-tab session; every data request is still checked server-side.
       } catch {
         // Offline resilience: keep in-tab session active
       } finally {
@@ -610,11 +637,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const requestPasswordReset = useCallback(async (email: string) => {
     const normalizedEmail = email.trim().toLowerCase();
-    const appUser = await findAppUserByEmail(normalizedEmail);
-
-    if (!isAuthorizedAppUser(appUser)) {
-      throw new Error("Your account is not authorized to reset a password. Please contact the administrator.");
-    }
+    // Account eligibility is checked server-side by the backend OTP endpoint;
+    // staff accounts are not readable before login.
 
     // Perform sign out without blocking password reset flow
     supabase.auth.signOut().catch(() => null);
@@ -639,7 +663,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return await response.json();
         }
         const errJson = await response.json().catch(() => null);
-        return { ok: false, error: errJson?.error || "Backend reset request failed" };
+        return { ok: false, status: response.status, error: errJson?.error || "Backend reset request failed" };
       } catch (err: any) {
         clearTimeout(timeoutId);
         return { ok: false, error: err?.name === "AbortError" ? "Backend request timed out" : "Backend unavailable" };
@@ -669,6 +693,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let backendResult: any = null;
     if (backendOutcome.status === "fulfilled") {
       backendResult = backendOutcome.value;
+    }
+
+    if (backendResult?.status === 403) {
+      throw new Error(backendResult.error);
     }
 
     if (!supabaseSucceeded && (!backendResult || !backendResult.ok)) {
@@ -841,63 +869,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     markGoogleOtpVerifiedEmail(email);
   }, []);
 
-  const validateCredentials = useCallback(async (username: string, password: string): Promise<AuthUser | null> => {
+  const validateCredentials = useCallback(async (
+    username: string,
+    password: string,
+    options?: { issueSession?: boolean },
+  ): Promise<AuthUser | null> => {
     const cleanUsername = username.trim().toLowerCase();
     const cleanPassword = password.trim();
     if (!cleanUsername || !cleanPassword) return null;
 
-    // 1. Primary: Authenticate securely via Server-Side API endpoint
-    // The server validates credentials against database hashes, sets secure HTTP-only cookies, and returns signed JWT
+    // Credentials are verified by the login_user database function (bcrypt),
+    // which also issues the session token the database requires on every request.
     try {
-      const response = await fetch(`${BACKEND_BASE}/api/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include", // Transmit and store cookies across all tabs
-        body: JSON.stringify({ username: cleanUsername, password: cleanPassword }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data?.ok && data?.user) {
-          const authUser: AuthUser = {
-            user_id: data.user.user_id,
-            name: data.user.name || cleanUsername,
-            username: data.user.username || cleanUsername,
-            role_id: data.user.role_id || "",
-            role_name: data.user.role_name || "Administrator",
-            status: data.user.status || "Active",
-            email: data.user.email || null,
-            avatar_url: data.user.avatar_url || getStoredAvatarSync({
-              userId: data.user.user_id,
-              username: data.user.username || cleanUsername,
-              email: data.user.email || null,
-            }),
-          };
-          return authUser;
-        }
-      } else {
-        const errJson = await response.json().catch(() => null);
-        if (errJson?.error && String(errJson.error).toLowerCase().includes("inactive")) {
-          throw new Error("This account is inactive. Please contact the administrator.");
-        }
-        // If backend returned non-OK, fall through to Supabase RPC fallback
-      }
-    } catch (apiErr: any) {
-      if (apiErr?.message && apiErr.message.toLowerCase().includes("inactive")) {
-        throw apiErr;
-      }
-      if (apiErr?.message && (apiErr.message.includes("server error") || apiErr.message.includes("try again"))) {
-        throw apiErr;
-      }
-      // If backend server was temporarily unreachable, fall through to Supabase RPC login_user
-    }
-
-    // 2. Secondary fallback: Supabase RPC login_user (server-side PostgreSQL function)
-    try {
-      const { data, error } = await supabase.rpc("login_user", {
-        p_username: cleanUsername,
-        p_password: cleanPassword,
-      });
+      const { data, error } = await callLoginRpc(cleanUsername, cleanPassword, options?.issueSession ?? true);
 
       if (!error && data) {
         const payload = data as any;
@@ -910,7 +894,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             name: payload.name || cleanUsername,
             username: payload.username || cleanUsername,
             role_id: payload.role_id || "",
-            role_name: payload.role_name || "Administrator",
+            role_name: payload.role_name || "",
             status: payload.status || "Active",
             email: payload.email || null,
             avatar_url: payload.avatar_url || getStoredAvatarSync({
@@ -919,6 +903,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               email: payload.email || null,
             }),
           };
+          if (options?.issueSession ?? true) {
+            setAppSessionToken(payload.session_token ? String(payload.session_token) : null);
+            syncBackendSession();
+          }
           return authUser;
         }
       }
@@ -983,7 +971,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const unlockTerminal = useCallback(async (password: string): Promise<boolean> => {
     if (!user) return false;
-    const verified = await validateCredentials(user.username, password);
+    const verified = await validateCredentials(user.username, password, { issueSession: false });
     if (verified) {
       setIsLocked(false);
       sessionStorage.removeItem(MERYL_TERMINAL_LOCKED_KEY);
@@ -1049,14 +1037,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(() => {
     const currentUser = userRef.current;
-    if (currentUser) {
-      logAuditEvent({
-        action_type: "AUTH_LOGOUT",
-        entity_type: "USER",
-        entity_id: currentUser.user_id,
-        metadata: { username: currentUser.username, role: currentUser.role_name },
-      });
-    }
+    // The logout audit entry must be written while the session is still valid,
+    // so credentials are revoked only after it completes.
+    const sessionToken = getAppSessionToken();
+    const auditWritten = currentUser
+      ? logAuditEvent({
+          action_type: "AUTH_LOGOUT",
+          entity_type: "USER",
+          entity_id: currentUser.user_id,
+          metadata: { username: currentUser.username, role: currentUser.role_name },
+        })
+      : Promise.resolve();
 
     // Invalidate server-side cookies
     try {
@@ -1071,6 +1062,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       document.cookie = "meryl_token=; Max-Age=0; path=/;";
     }
 
+    auditWritten.finally(() => {
+      revokeAppSession(sessionToken);
+      supabase.auth.signOut().catch(() => null);
+    });
     clearStoredUser();
     sessionStorage.removeItem(MERYL_TERMINAL_LOCKED_KEY);
     if (typeof localStorage !== "undefined") {
@@ -1078,7 +1073,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     setIsLocked(false);
     clearGoogleOtpVerifiedEmail();
-    supabase.auth.signOut().catch(() => null);
     setUser(null);
   }, []);
 

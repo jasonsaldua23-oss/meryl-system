@@ -15,6 +15,8 @@ services:
         scope: build
       - key: SUPABASE_ANON_KEY
         scope: build
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
       - key: GMAIL_APP_EMAIL
         scope: build
       - key: GMAIL_APP_PASSWORD

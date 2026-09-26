@@ -809,7 +809,7 @@ export function Login() {
               <h3 className="text-2xl font-bold text-white tracking-tight">Login Successful!</h3>
               <p className="text-xs text-white/60">
                 {loggedInUser ? (
-                  <span>Welcome back, <strong className="text-white font-medium">{loggedInUser.full_name || loggedInUser.username}</strong></span>
+                  <span>Welcome back, <strong className="text-white font-medium">{loggedInUser.name || loggedInUser.username}</strong></span>
                 ) : (
                   'Welcome to Meryl Shoes'
                 )}

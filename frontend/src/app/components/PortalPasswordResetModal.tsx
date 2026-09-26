@@ -151,10 +151,10 @@ export function PortalPasswordResetModal({
 
       // Log security audit event
       await logAuditEvent({
-        action: "PASSWORD_RESET_OTP",
-        table_name: "user",
-        record_id: effectiveUser?.user_id,
-        details: {
+        action_type: "PASSWORD_RESET_OTP",
+        entity_type: "USER",
+        entity_id: effectiveUser?.user_id,
+        metadata: {
           username: effectiveUser?.username,
           email: email.trim().toLowerCase(),
           reset_location: "portal_modal",

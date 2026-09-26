@@ -361,10 +361,10 @@ export function PortalProfileSettingsModal({
 
       // 4. Audit log
       await logAuditEvent({
-        action: "UPDATE_PROFILE",
-        table_name: "user",
-        record_id: currentUser.user_id,
-        details: {
+        action_type: "UPDATE_PROFILE",
+        entity_type: "USER",
+        entity_id: currentUser.user_id,
+        metadata: {
           previous_name: currentUser.name,
           updated_name: trimmedName,
           updated_email: trimmedEmail,
@@ -445,10 +445,10 @@ export function PortalProfileSettingsModal({
       });
 
       await logAuditEvent({
-        action: "PASSWORD_RESET_OTP",
-        table_name: "user",
-        record_id: currentUser?.user_id,
-        details: {
+        action_type: "PASSWORD_RESET_OTP",
+        entity_type: "USER",
+        entity_id: currentUser?.user_id,
+        metadata: {
           email: resetEmail.trim().toLowerCase(),
           location: "portal_settings",
         },

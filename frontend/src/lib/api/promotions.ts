@@ -1,5 +1,6 @@
 import { getRowById, listRows, removeRow } from "./_common";
 import { supabase } from "../supabase";
+import { BACKEND_BASE, getBackendAuthHeaders } from "../auth-context";
 
 const PROMO_JOIN = "*, promo_product:promo_product(*, product:product(*))";
 
@@ -57,9 +58,9 @@ export const promotionsApi = {
     }
 
     // Secondary fallback: Flask route (legacy compatibility).
-    const response = await fetch("/api/promotions/public", {
+    const response = await fetch(`${BACKEND_BASE}/api/promotions/public`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(await getBackendAuthHeaders()) },
       credentials: "include",
       body: JSON.stringify(createPayload),
     });
@@ -119,9 +120,9 @@ export const promotionsApi = {
     }
 
     // Secondary fallback: Flask route (legacy compatibility).
-    const response = await fetch(`/api/promotions/${encodeURIComponent(id)}/public`, {
+    const response = await fetch(`${BACKEND_BASE}/api/promotions/${encodeURIComponent(id)}/public`, {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(await getBackendAuthHeaders()) },
       credentials: "include",
       body: JSON.stringify(payload),
     });

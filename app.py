@@ -2,13 +2,13 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from functools import wraps
 import hashlib
+import hmac
 import json
 import logging
 import math
 import os
 import random
 import smtplib
-import traceback
 from email.message import EmailMessage
 from pathlib import Path
 import re
@@ -217,7 +217,7 @@ def handle_cors_preflight():
             res = Response("", status=204)
             res.headers["Access-Control-Allow-Origin"] = origin
             res.headers["Access-Control-Allow-Credentials"] = "true"
-            res.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, apikey"
+            res.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, apikey, X-Meryl-Session"
             res.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
             return res
         return Response("Forbidden Origin", status=403)
@@ -236,7 +236,7 @@ def add_security_headers(response):
     if origin and (origin in ALLOWED_ORIGINS or (os.getenv("FLASK_ENV") != "production" and ("localhost" in origin or "127.0.0.1" in origin))):
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Credentials"] = "true"
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, apikey"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, apikey, X-Meryl-Session"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
 
     # Tightened CSP: no unsafe-eval, no unsafe-inline in script-src, narrowed origins
@@ -277,7 +277,12 @@ def get_supabase():
         raise RuntimeError(_supabase_error)
 
     url = os.getenv("SUPABASE_URL")
-    key = os.getenv("SUPABASE_KEY")
+    # The backend is a trusted server: it uses the service-role key, which
+    # bypasses RLS. The anon key only works for data a signed-in staff session
+    # may see, which the backend's own requests do not carry.
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
+    if not os.getenv("SUPABASE_SERVICE_ROLE_KEY"):
+        logger.warning("SUPABASE_SERVICE_ROLE_KEY is not set; backend database access will be limited by RLS.")
 
     if not url or not key:
         error_msg = (
@@ -1076,10 +1081,75 @@ def get_invalid_login_notice():
     return ui_get_invalid_login_notice()
 
 
+def resolve_request_identity():
+    """Verify the caller of a React API request.
+
+    Accepts the staff session token (X-Meryl-Session, issued by the login_user
+    database function) or a Supabase access token (Authorization: Bearer, from
+    Google/email-OTP sign-in). Both are checked by asking the database who the
+    caller is, so a forged or revoked token resolves to nobody.
+    """
+    supabase_url = (os.getenv("SUPABASE_URL") or "").rstrip("/")
+    anon_key = os.getenv("SUPABASE_ANON_KEY") or os.getenv("SUPABASE_KEY") or ""
+    session_token = (request.headers.get("X-Meryl-Session") or "").strip()
+    auth_header = (request.headers.get("Authorization") or "").strip()
+    bearer = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else ""
+
+    if not supabase_url or not anon_key or not (session_token or bearer):
+        return None
+
+    headers = {
+        "apikey": anon_key,
+        "Authorization": f"Bearer {bearer or anon_key}",
+        "Content-Type": "application/json",
+    }
+    if session_token:
+        headers["x-meryl-session"] = session_token
+
+    try:
+        whoami_request = urllib.request.Request(
+            f"{supabase_url}/rest/v1/rpc/app_whoami",
+            data=b"{}",
+            headers=headers,
+            method="POST",
+        )
+        with urllib.request.urlopen(whoami_request, timeout=8) as response:
+            user = json.loads(response.read().decode("utf-8") or "null")
+    except Exception as exc:
+        logger.warning(f"Session verification failed: {exc}")
+        return None
+
+    if not isinstance(user, dict) or not user.get("user_id"):
+        return None
+    if str(user.get("status") or "active").strip().lower() != "active":
+        return None
+    return user
+
+
+def current_request_user():
+    """Flask cookie session if present, otherwise a verified token identity."""
+    if session.get("current_user"):
+        return session["current_user"]
+    if "verified_identity" not in g:
+        identity = resolve_request_identity()
+        g.verified_identity = (
+            {
+                "user_id": str(identity.get("user_id")),
+                "username": identity.get("username"),
+                "name": identity.get("name"),
+                "role": identity.get("role_name"),
+                "email": identity.get("email"),
+            }
+            if identity
+            else None
+        )
+    return g.verified_identity
+
+
 def login_required(view_func):
     @wraps(view_func)
     def wrapped_view(*args, **kwargs):
-        if not session.get("current_user"):
+        if not current_request_user():
             if request.path.startswith("/api/"):
                 return {"ok": False, "error": "authentication_required"}, 401
             set_notice(get_login_required_notice(), "warning")
@@ -1093,14 +1163,16 @@ def roles_required(*allowed_roles):
     def decorator(view_func):
         @wraps(view_func)
         def wrapped_view(*args, **kwargs):
-            if not session.get("current_user"):
+            current_user = current_request_user()
+            if not current_user:
                 if request.path.startswith("/api/"):
                     return {"ok": False, "error": "authentication_required"}, 401
                 set_notice(get_login_required_notice(), "warning")
                 return redirect(url_for("login"))
 
-            current_role = session.get("current_user", {}).get("role")
-            if current_role not in allowed_roles:
+            # Stored role names vary ("Administrator", "admin", "Sales Staff"); compare canonical forms.
+            current_role = canonical_app_role_name(current_user.get("role"))
+            if current_role not in {canonical_app_role_name(role) for role in allowed_roles}:
                 if request.path.startswith("/api/"):
                     return {"ok": False, "error": "forbidden"}, 403
                 set_notice(get_access_denied_notice(), "warning")
@@ -1608,7 +1680,10 @@ def verify_credentials_server(identifier, password):
             "Authorization": f"Bearer {sb_key}",
             "Content-Type": "application/json",
         }
-        rpc_body = json.dumps({"p_username": clean_identifier, "p_password": clean_password}).encode("utf-8")
+        # Only verifying credentials here; the backend keeps its own cookie session.
+        rpc_body = json.dumps(
+            {"p_username": clean_identifier, "p_password": clean_password, "p_issue_session": False}
+        ).encode("utf-8")
         req = urllib.request.Request(rpc_url, data=rpc_body, headers=rpc_headers, method="POST")
         with urllib.request.urlopen(req, timeout=8) as resp:
             if resp.status == 200:
@@ -1622,7 +1697,7 @@ def verify_credentials_server(identifier, password):
                             "user_id": str(data.get("user_id")),
                             "name": data.get("name") or "User",
                             "username": data.get("username") or clean_identifier,
-                            "role_name": data.get("role_name") or "Administrator",
+                            "role_name": data.get("role_name") or "",
                             "role_id": str(data.get("role_id") or ""),
                             "status": data.get("status") or "active",
                             "email": data.get("email") or "",
@@ -2082,6 +2157,7 @@ def promotion_write_without_optional_columns(write_fn, payload):
 
 
 @app.route("/api/promotions/public", methods=["POST"])
+@login_required
 def api_promotion_create_public():
     payload, error = normalize_promotion_api_payload(request.get_json(silent=True) or {})
     if error:
@@ -2099,16 +2175,12 @@ def api_promotion_create_public():
             raise ValueError("Promotion was not created.")
         return {"ok": True, "promotion": created[0], **created[0]}
     except Exception as exc:
-        err = str(exc) or repr(exc) or "Unknown promotion update error"
-        return {
-            "ok": False,
-            "error": err,
-            "error_type": type(exc).__name__,
-            "trace_tail": traceback.format_exc().splitlines()[-6:],
-        }, 500
+        logger.exception("Promotion create failed")
+        return {"ok": False, "error": str(exc) or "Unknown promotion update error"}, 500
 
 
 @app.route("/api/promotions/<promo_id>/public", methods=["PATCH"])
+@login_required
 def api_promotion_update_public(promo_id):
     promo_id = str(promo_id or "").strip()
     if not promo_id:
@@ -2223,10 +2295,11 @@ def api_promotion_notify(promo_id):
 
 
 @app.route("/api/promotions/<promo_id>/notify/public", methods=["POST"])
+@login_required
 def api_promotion_notify_public(promo_id):
     """
-    Public notify endpoint for React/Supabase-auth sessions that do not carry
-    Flask cookie auth. Uses the same delivery flow as the protected route.
+    Legacy alias of the notify route. React sessions authenticate with the
+    X-Meryl-Session / Bearer headers accepted by login_required.
     """
     try:
         promo_id = str(promo_id or "").strip()
@@ -2429,7 +2502,7 @@ def api_password_reset_request():
         logger.exception("Failed to store password reset OTP in database")
         return {"ok": False, "error": f"Database error: {db_exc}"}, 500
 
-    logger.info(f"=== [PASSWORD RESET OTP] Generated OTP for {email}: {otp_code} ===")
+    logger.info(f"[PASSWORD RESET OTP] Generated OTP for {email}")
 
     is_production = str(os.getenv("FLASK_ENV", "")).strip().lower() == "production"
     email_sent = False
@@ -2593,33 +2666,16 @@ def api_auth_login():
 
 @app.route("/api/auth/sync-session", methods=["POST"])
 def api_auth_sync_session():
-    payload = request.get_json(silent=True) or {}
-    email = str(payload.get("email") or "").strip().lower()
-    user_id = str(payload.get("user_id") or "").strip()
-
-    if not email and not user_id:
-        return {"ok": False, "error": "Email or user ID required"}, 400
+    # Identity comes only from a verified token, never from the request body.
+    identity = resolve_request_identity()
+    if not identity:
+        return {"ok": False, "error": "authentication_required"}, 401
 
     try:
-        users = []
-        if email:
-            users = supabase().table("user").select("user_id, name, username, role_id, status, email, avatar_url").ilike("email", email).limit(1).execute().data or []
-        if not users and user_id:
-            users = supabase().table("user").select("user_id, name, username, role_id, status, email, avatar_url").eq("user_id", user_id).limit(1).execute().data or []
-
-        if not users:
-            return {"ok": False, "error": "User account not found"}, 404
-
-        user_row = users[0]
-        if str(user_row.get("status") or "active").lower() in ("inactive", "disabled"):
-            return {"ok": False, "error": "Account is inactive"}, 403
-
-        role_name = "Administrator"
-        role_id = user_row.get("role_id")
-        if role_id:
-            role_data = supabase().table("role").select("role_name").eq("role_id", role_id).limit(1).execute().data or []
-            if role_data and role_data[0].get("role_name"):
-                role_name = role_data[0]["role_name"]
+        user_row = identity
+        role_name = str(identity.get("role_name") or "")
+        role_id = identity.get("role_id")
+        email = str(identity.get("email") or "").strip().lower()
 
         raw_avatar = str(user_row.get("avatar_url") or "").strip()
         jwt_avatar = raw_avatar if (raw_avatar.startswith("http://") or raw_avatar.startswith("https://")) and len(raw_avatar) < 512 and not raw_avatar.startswith("data:") else ""

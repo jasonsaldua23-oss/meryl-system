@@ -18,6 +18,7 @@ ROLE_NAME_TO_APP_ROLE = {
     "admin": "admin",
     "sales staff": "sales_staff",
     "sales_staff": "sales_staff",
+    "cashier": "sales_staff",
     "inventory staff": "inventory_staff",
     "inventory_staff": "inventory_staff",
 }

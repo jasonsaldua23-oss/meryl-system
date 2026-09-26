@@ -1,6 +1,7 @@
 import { supabase } from "../supabase";
+import { BACKEND_BASE, getBackendAuthHeaders } from "../auth-context";
 
-const FLASK_API_BASE = import.meta.env.VITE_API_URL || "http://localhost:5000";
+const FLASK_API_BASE = BACKEND_BASE;
 
 export type ProductAnalyticsSnapshot = {
   snapshot_id: string;
@@ -68,6 +69,7 @@ export const productAnalyticsSnapshotsApi = {
       const response = await fetch(`${FLASK_API_BASE}/api/analytics/product/snapshots?${params.toString()}`, {
         method: "GET",
         credentials: "include",
+        headers: await getBackendAuthHeaders(),
       });
       if (response.ok) {
         const result = await response.json().catch(() => ({}));
@@ -125,7 +127,7 @@ export const productAnalyticsSnapshotsApi = {
     try {
       const response = await fetch(`${FLASK_API_BASE}/api/analytics/product/rebuild`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(await getBackendAuthHeaders()) },
         credentials: "include",
         body: JSON.stringify({
           periods,

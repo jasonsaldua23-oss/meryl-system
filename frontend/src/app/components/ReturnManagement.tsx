@@ -1569,18 +1569,19 @@ export function ReturnManagement() {
     }
 
     // Persist receipt proof in client-side persistent IndexedDB store
-    await saveReceiptProof({
+    const storedProof: StoredReceiptProof = {
       returnId,
       salesId: selectedSale?.sales_id,
       name: proofResult.receiptProofName,
       url: proofResult.receiptProofUrl,
       verifiedAt: proofResult.receiptVerifiedAt,
-    });
+    };
+    await saveReceiptProof(storedProof);
 
     setStoredReceiptsMap((prev) => {
       const next = new Map(prev);
-      if (returnId) next.set(returnId, proofResult);
-      if (selectedSale?.sales_id) next.set(`sale_${selectedSale.sales_id}`, proofResult);
+      if (returnId) next.set(returnId, storedProof);
+      if (selectedSale?.sales_id) next.set(`sale_${selectedSale.sales_id}`, storedProof);
       return next;
     });
 

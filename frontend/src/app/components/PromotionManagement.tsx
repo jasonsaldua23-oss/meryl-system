@@ -12,7 +12,7 @@ import { TablePagination } from './ui/table-pagination';
 import { Tag, Plus, Edit, Trash2, TrendingUp, Coins, ShoppingCart, Percent, Mail, CheckCircle, X, Check, ToggleLeft, ToggleRight, Power, Copy, RotateCcw, Calendar, Search, Filter } from 'lucide-react';
 import { toast } from 'sonner';
 import { useCustomers, useProducts, usePromotions, usePromotionsMutations, useSales } from '../../lib/hooks';
-import { useAuth } from '../../lib/auth-context';
+import { BACKEND_BASE, getBackendAuthHeaders, useAuth } from '../../lib/auth-context';
 import { writeAuditLog } from '../../lib/audit';
 import { supabase } from '../../lib/supabase';
 
@@ -575,28 +575,13 @@ export function PromotionManagement() {
 
   const triggerPromotionEmailNotification = async (promoId: string) => {
     const parseResult = async (response: Response) => response.json().catch(() => ({}));
-    const callNotify = async (url: string) => {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-      });
-      const result = await parseResult(response);
-      return { response, result };
-    };
-
-    const secureUrl = `/api/promotions/${encodeURIComponent(promoId)}/notify`;
-    const publicUrl = `/api/promotions/${encodeURIComponent(promoId)}/notify/public`;
-
-    let { response, result } = await callNotify(secureUrl);
-
-    const needsPublicFallback =
-      !response.ok &&
-      String(result?.error || '').toLowerCase() === 'authentication_required';
-
-    if (needsPublicFallback) {
-      ({ response, result } = await callNotify(publicUrl));
-    }
+    // The backend verifies the staff session from these headers.
+    const response = await fetch(`${BACKEND_BASE}/api/promotions/${encodeURIComponent(promoId)}/notify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(await getBackendAuthHeaders()) },
+      credentials: 'include',
+    });
+    const result = await parseResult(response);
 
     if (!response.ok || result?.ok === false) {
       throw new Error(result?.error || 'Failed to send promotion notifications');

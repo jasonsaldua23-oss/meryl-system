@@ -70,3 +70,6 @@ test-results/
 frontend/playwright-report/
 frontend/test-results/
 
+
+# Local credential stores (never commit)
+auth_accounts.json
