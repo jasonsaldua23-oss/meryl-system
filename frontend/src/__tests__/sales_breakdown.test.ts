@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildBreakdownSlots, storeHourSlots } from "../app/components/ReportsAnalytics";
+import { buildBreakdownSlots, customGranularity, storeHourSlots } from "../app/components/ReportsAnalytics";
 
 const NOW = new Date(2026, 8, 26, 14, 30, 0); // Sat, Sep 26, 2026 2:30 PM local
 
@@ -102,11 +102,43 @@ describe("Sales Breakdown periods", () => {
     expect(slots[9].end).toEqual(new Date(2026, 8, 10, 23, 59, 59, 999));
   });
 
+  it("custom range detail level: hours, days, weeks, months, years", () => {
+    expect(customGranularity(1)).toBe("hourly");
+    expect(customGranularity(3)).toBe("hourly");
+    expect(customGranularity(4)).toBe("daily");
+    expect(customGranularity(31)).toBe("daily");
+    expect(customGranularity(32)).toBe("weekly");
+    expect(customGranularity(92)).toBe("weekly");
+    expect(customGranularity(93)).toBe("monthly");
+    expect(customGranularity(731)).toBe("monthly");
+    expect(customGranularity(732)).toBe("annually");
+  });
+
+  it("custom 1-3 months: Sunday-Saturday weeks, first/last clipped and relabelled", () => {
+    const { slots, unit } = buildBreakdownSlots("custom", "2026-08-05", "2026-09-20", NOW);
+    expect(unit).toBe("week");
+    expect(slots[0].start).toEqual(new Date(2026, 7, 5)); // Wed Aug 5 (week began Sun Aug 2)
+    expect(slots[0].label).toBe("Aug 5 – Aug 8");
+    expect(slots[1].label).toBe("Aug 9 – Aug 15");
+    expect(slots[slots.length - 1].label).toBe("Sep 20");
+    expect(slots[slots.length - 1].end).toEqual(new Date(2026, 8, 20, 23, 59, 59, 999));
+    slots.slice(1).forEach((slot, i) => expect(slot.start.getTime()).toBe(slots[i].end.getTime() + 1));
+  });
+
+  it("custom over 2 years: one row per year", () => {
+    const { slots, unit } = buildBreakdownSlots("custom", "2023-03-01", "2026-09-10", NOW);
+    expect(unit).toBe("year");
+    expect(slots.map((s) => s.start.getFullYear())).toEqual([2023, 2024, 2025, 2026]);
+  });
+
   it("custom: long ranges switch to months", () => {
     const { slots, unit } = buildBreakdownSlots("custom", "2026-01-15", "2026-09-10", NOW);
     expect(unit).toBe("month");
     expect(slots).toHaveLength(9);
     expect(slots[0].start).toEqual(new Date(2026, 0, 15));
+    expect(slots[0].label).toBe("January 2026 (Jan 15 – Jan 31)");
+    expect(slots[1].label).toBe("February 2026");
     expect(slots[8].end).toEqual(new Date(2026, 8, 10, 23, 59, 59, 999));
+    expect(slots[8].label).toBe("September 2026 (Sep 1 – Sep 10)");
   });
 });

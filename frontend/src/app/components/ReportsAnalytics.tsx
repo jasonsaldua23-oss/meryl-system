@@ -387,16 +387,26 @@ function weekStartSunday(date: Date) {
   return copy;
 }
 
+/**
+ * Detail level for a custom range, used by both the chart and the Sales Breakdown:
+ * 1-3 days -> store hours, up to a month -> days, up to 3 months -> weeks,
+ * up to 2 years -> months, longer -> years.
+ */
+export function customGranularity(days: number): TrendBucketMode {
+  if (days <= HOURLY_MAX_DAYS) return 'hourly';
+  if (days <= 31) return 'daily';
+  if (days <= 92) return 'weekly';
+  if (days <= 731) return 'monthly';
+  return 'annually';
+}
+
 function trendBucketMode(timeRange: ReportPeriod, days: number): TrendBucketMode {
   if (timeRange === 'daily') return 'daily';
   if (timeRange === 'weekly') return 'weekly';
   if (timeRange === 'monthly') return 'monthly';
   if (timeRange === 'quarterly') return 'quarterly';
   if (timeRange === 'annually') return 'annually';
-  if (days <= 31) return 'daily';
-  if (days <= 120) return 'weekly';
-  if (days <= 730) return 'monthly';
-  return 'annually';
+  return customGranularity(days);
 }
 
 function bucketStartForDate(date: Date, mode: TrendBucketMode) {
@@ -470,7 +480,7 @@ function salesTrendFrameUncapped(timeRange: ReportPeriod, customStartDate?: stri
   }
 
   if (timeRange === 'quarterly') {
-    return { start: window.start, end: window.now, mode: 'monthly' as TrendBucketMode };
+    return { start: window.start, end: window.now, mode: 'weekly' as TrendBucketMode };
   }
 
   if (timeRange === 'annually') {
@@ -579,11 +589,17 @@ export function buildBreakdownSlots(
     }`;
     unit = 'hour';
   } else {
-    const days = window.days;
-    if (days <= 92) {
+    const granularity = customGranularity(window.days);
+    if (granularity === 'daily') {
       addDays(window.start, window.now);
       unit = 'day';
-    } else if (days <= 731) {
+    } else if (granularity === 'weekly') {
+      for (let start = weekStartSunday(window.start); start <= window.now; start = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7)) {
+        const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7, 0, 0, 0, -1);
+        addSlot(start, end, `${shortDate(start)} – ${shortDate(end, start.getFullYear() !== end.getFullYear())}`);
+      }
+      unit = 'week';
+    } else if (granularity === 'monthly') {
       addMonths(window.start, window.now, true);
       unit = 'month';
     } else {
@@ -592,11 +608,29 @@ export function buildBreakdownSlots(
       }
       unit = 'year';
     }
-    // Custom ranges start/end mid-period: clip the first and last slot to the range.
+    // Custom ranges start/end mid-period: clip the first and last slot to the range,
+    // and relabel clipped weeks/months so the label says exactly what is covered.
     if (slots.length) {
-      slots[0].start = window.start > slots[0].start ? window.start : slots[0].start;
+      const relabel = (slot: Slot) => {
+        if (unit === 'week') {
+          slot.label = startOfDay(slot.start).getTime() === startOfDay(slot.end).getTime()
+            ? shortDate(slot.start)
+            : `${shortDate(slot.start)} – ${shortDate(slot.end, slot.start.getFullYear() !== slot.end.getFullYear())}`;
+        }
+        if (unit === 'month') slot.label = `${slot.label} (${shortDate(slot.start)} – ${shortDate(slot.end)})`;
+      };
+      const clipped = new Set<Slot>();
+      const first = slots[0];
+      if (window.start > first.start) {
+        first.start = window.start;
+        clipped.add(first);
+      }
       const last = slots[slots.length - 1];
-      last.end = window.now < last.end ? window.now : last.end;
+      if (window.now < last.end) {
+        last.end = window.now;
+        clipped.add(last);
+      }
+      clipped.forEach(relabel);
     }
     rangeLabel = formatDateRange(window.start, window.now);
   }
