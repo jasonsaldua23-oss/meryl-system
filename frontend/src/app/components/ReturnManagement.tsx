@@ -3180,7 +3180,7 @@ export function ReturnManagement() {
                               <Eye className="w-4 h-4" />
                             </Button>
                           </DialogTrigger>
-                        <DialogContent className="bg-zinc-950 border-zinc-800 text-zinc-100 max-w-2xl max-h-[88vh] overflow-y-auto">
+                        <DialogContent className="bg-zinc-950 border-zinc-800 text-zinc-100 sm:max-w-2xl max-h-[88vh] overflow-y-auto overflow-x-hidden [&>*]:min-w-0">
                           <DialogHeader className="space-y-2 border-b border-zinc-800 pb-4 text-left">
                             <div className="flex flex-wrap items-center gap-2">
                               <DialogTitle className="text-lg font-bold text-zinc-100">{returnItem.display_return_id}</DialogTitle>
@@ -3202,7 +3202,7 @@ export function ReturnManagement() {
                                 const colorChanged = detail.productColor !== detail.replacementProductColor;
                                 return (
                                   <div key={detail.return_detail_id} className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
-                                    <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+                                    <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3">
                                       <div className="min-w-0">
                                         <p className="text-[10px] font-semibold uppercase tracking-wider text-red-300/80">Returned</p>
                                         <p className="truncate font-semibold text-zinc-100">{detail.productName}</p>
@@ -3241,9 +3241,9 @@ export function ReturnManagement() {
                                 ["Original cashier", withStaffCode(returnItem.originalCashier, returnItem.originalCashierCode)],
                                 ["Processed by", withStaffCode(returnItem.processedBy, returnItem.staffCode)],
                               ].map(([label, value]) => (
-                                <div key={label} className="flex items-center justify-between gap-3 border-b border-zinc-800/70 py-2.5 last:border-b-0 sm:[&:nth-last-child(2)]:border-b-0">
-                                  <dt className="text-zinc-400">{label}</dt>
-                                  <dd className="truncate text-right font-medium text-zinc-100">{value}</dd>
+                                <div key={label} className="flex min-w-0 items-center justify-between gap-3 border-b border-zinc-800/70 py-2.5 last:border-b-0 sm:[&:nth-last-child(2)]:border-b-0">
+                                  <dt className="shrink-0 text-zinc-400">{label}</dt>
+                                  <dd className="min-w-0 truncate text-right font-medium text-zinc-100" title={value}>{value}</dd>
                                 </div>
                               ))}
                             </dl>

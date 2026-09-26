@@ -1058,7 +1058,7 @@ export function SalesManagement() {
                                         const colorChanged = detail.returnedColor !== detail.replacementColor;
                                         return (
                                           <div key={detail.return_detail_id} className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
-                                            <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+                                            <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3">
                                               <div className="min-w-0">
                                                 <p className="text-[10px] font-semibold uppercase tracking-wider text-red-300/80">Returned</p>
                                                 <p className="truncate font-semibold text-zinc-100">{detail.returnedProductName}</p>
