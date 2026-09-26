@@ -7,6 +7,11 @@ import { useNotifications, useProducts, usePromotions, useSales } from "../../li
 import { useAuth } from "../../lib/auth-context";
 import { isPromotionLive, promotionBoundaryMs, promotionDisplayName } from "../../lib/promotion-rules";
 import { shortId } from "./ui/utils";
+import {
+  loadNotificationState,
+  restoreDismissedNotifications,
+  saveNotificationState,
+} from "../../lib/notification-state";
 
 type Category = "stock" | "sales" | "promotion" | "email";
 
@@ -26,8 +31,6 @@ const CATEGORY_LABELS: Record<Category, string> = {
   email: "Promotion emails",
 };
 
-/** Read / dismissed ids kept per user, so they survive a page reload. */
-const MAX_STORED_IDS = 500;
 
 function asDate(value: string | null | undefined) {
   if (!value) return null;
@@ -55,24 +58,6 @@ function stockVariantLabel(product: any) {
   const variantText = variant.length ? ` - ${variant.join(" / ")}` : "";
   const skuText = sku ? ` (${shortId(sku)})` : "";
   return `${brand ? `${brand} ` : ""}${name}${variantText}${skuText}`;
-}
-
-function loadIds(key: string) {
-  try {
-    const raw = localStorage.getItem(key);
-    const ids = raw ? JSON.parse(raw) : [];
-    return new Set<string>(Array.isArray(ids) ? ids.map(String) : []);
-  } catch {
-    return new Set<string>();
-  }
-}
-
-function saveIds(key: string, ids: Set<string>) {
-  try {
-    localStorage.setItem(key, JSON.stringify(Array.from(ids).slice(-MAX_STORED_IDS)));
-  } catch {
-    // Storage unavailable (private window): state lasts for this visit only.
-  }
 }
 
 function formatTimestamp(date: Date) {
@@ -109,31 +94,33 @@ function typeColor(type: NotificationItem["type"]) {
 
 export function NotificationCenter() {
   const { user } = useAuth();
-  const storageSuffix = user?.user_id ?? "guest";
-  const readKey = `meryl_notifications_read:${storageSuffix}`;
-  const dismissedKey = `meryl_notifications_dismissed:${storageSuffix}`;
+  const userId = user?.user_id ?? "";
 
   const [isOpen, setIsOpen] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const [filter, setFilter] = useState<"all" | "unread" | Category>("all");
-  const [readIds, setReadIds] = useState<Set<string>>(() => loadIds(readKey));
-  const [dismissedIds, setDismissedIds] = useState<Set<string>>(() => loadIds(dismissedKey));
+  const [readIds, setReadIds] = useState<Set<string>>(new Set());
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
   // Re-render every minute so "5m ago" stays current while the page is open.
   const [, setTick] = useState(0);
 
-  // Which user's ids are loaded; never save one user's ids under another's key.
-  const [loadedFor, setLoadedFor] = useState(storageSuffix);
+  // Read / dismissed state is saved per user in the database, so it survives
+  // reloads, closing the tab and other devices.
   useEffect(() => {
-    setReadIds(loadIds(readKey));
-    setDismissedIds(loadIds(dismissedKey));
-    setLoadedFor(storageSuffix);
-  }, [readKey, dismissedKey, storageSuffix]);
-  useEffect(() => {
-    if (loadedFor === storageSuffix) saveIds(readKey, readIds);
-  }, [loadedFor, readKey, readIds, storageSuffix]);
-  useEffect(() => {
-    if (loadedFor === storageSuffix) saveIds(dismissedKey, dismissedIds);
-  }, [dismissedIds, dismissedKey, loadedFor, storageSuffix]);
+    let cancelled = false;
+    setReadIds(new Set());
+    setDismissedIds(new Set());
+    if (!userId) return;
+    loadNotificationState(userId).then((state) => {
+      if (cancelled) return;
+      // Keep anything clicked while the saved state was loading.
+      setReadIds((prev) => new Set([...state.read, ...prev]));
+      setDismissedIds((prev) => new Set([...state.dismissed, ...prev]));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
   useEffect(() => {
     const timer = setInterval(() => setTick((tick) => tick + 1), 60000);
     return () => clearInterval(timer);
@@ -309,15 +296,24 @@ export function NotificationCenter() {
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [isOpen]);
 
-  const markAsRead = (id: string) => setReadIds((prev) => new Set(prev).add(id));
-  const markAllAsRead = () =>
-    setReadIds((prev) => {
-      const next = new Set(prev);
-      notifications.forEach((n) => next.add(n.id));
-      return next;
-    });
-  const dismiss = (id: string) => setDismissedIds((prev) => new Set(prev).add(id));
-  const restoreDismissed = () => setDismissedIds(new Set());
+  const markRead = (ids: string[]) => {
+    const fresh = ids.filter((id) => !readIds.has(id));
+    if (!fresh.length) return;
+    const next = new Set([...readIds, ...fresh]);
+    setReadIds(next);
+    if (userId) void saveNotificationState(userId, fresh, { read: true }, { read: next, dismissed: dismissedIds });
+  };
+  const markAsRead = (id: string) => markRead([id]);
+  const markAllAsRead = () => markRead(notifications.map((n) => n.id));
+  const dismiss = (id: string) => {
+    const next = new Set(dismissedIds).add(id);
+    setDismissedIds(next);
+    if (userId) void saveNotificationState(userId, [id], { dismissed: true }, { read: readIds, dismissed: next });
+  };
+  const restoreDismissed = () => {
+    setDismissedIds(new Set());
+    if (userId) void restoreDismissedNotifications(userId, { read: readIds, dismissed: new Set() });
+  };
 
   const renderItem = (notification: NotificationItem) => {
     const unread = !readIds.has(notification.id);
