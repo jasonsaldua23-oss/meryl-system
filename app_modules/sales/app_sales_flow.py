@@ -20,18 +20,17 @@ def deny_sale_transaction(
     if not user_id:
         raise ValueError("Unable to resolve the administrator account in the database.")
 
-    return_record = (
-        supabase.table("returns")
-        .insert(
-            {
-                "sales_id": sales_id,
-                "user_id": user_id,
-                "total_refund": 0,
-                "return_date": datetime.now().isoformat(),
-            }
-        )
-        .execute()
-    )
+    # No refund amount is stored (1-to-1 replacements, no cash refunds). The
+    # retry covers databases that still have the old required total_refund column.
+    return_payload = {
+        "sales_id": sales_id,
+        "user_id": user_id,
+        "return_date": datetime.now().isoformat(),
+    }
+    try:
+        return_record = supabase.table("returns").insert(return_payload).execute()
+    except Exception:
+        return_record = supabase.table("returns").insert({**return_payload, "total_refund": 0}).execute()
     return_id = str((return_record.data or [{}])[0].get("return_id") or "").strip()
     detail_rows = (
         supabase.table("sales_details")
@@ -43,15 +42,16 @@ def deny_sale_transaction(
         or []
     )
     if return_id and detail_rows:
-        supabase.table("return_details").insert(
-            {
-                "return_id": return_id,
-                "product_id": detail_rows[0].get("product_id"),
-                "quantity_returned": 1,
-                "reason": reason,
-                "refund_amount": 0,
-            }
-        ).execute()
+        detail_payload = {
+            "return_id": return_id,
+            "product_id": detail_rows[0].get("product_id"),
+            "quantity_returned": 1,
+            "reason": reason,
+        }
+        try:
+            supabase.table("return_details").insert(detail_payload).execute()
+        except Exception:
+            supabase.table("return_details").insert({**detail_payload, "refund_amount": 0}).execute()
     payment_rows = (
         supabase.table("payment")
         .select("payment_id")

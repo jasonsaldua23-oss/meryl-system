@@ -1142,7 +1142,7 @@ export function PointOfSale() {
 
     const { data: existing, error: selectError } = await supabase
       .from("customer")
-      .select("customer_id,name,gender,age,birth_date")
+      .select("customer_id,name,gender,age")
       .eq("contact_number", phone)
       .limit(1);
     if (selectError) throw selectError;
@@ -1151,8 +1151,7 @@ export function PointOfSale() {
       const existingGender = String((existing[0] as any).gender ?? "").trim();
       const existingAgeRaw = Number((existing[0] as any).age ?? NaN);
       const existingAge = Number.isFinite(existingAgeRaw) ? existingAgeRaw : null;
-      const existingBirthDate = String((existing[0] as any).birth_date ?? "").trim();
-      if (!existingGender || (!existingBirthDate && existingAge === null)) {
+      if (!existingGender || existingAge === null) {
         throw new Error("This customer exists but is missing gender/age. Please update profile in Customers first.");
       }
       return { customer_id: existing[0].customer_id as string, label: (existing[0].name as string) || name };
@@ -1224,8 +1223,7 @@ export function PointOfSale() {
       const selectedGender = String((selectedCustomer as any)?.gender ?? "").trim();
       const selectedAgeRaw = Number((selectedCustomer as any)?.age ?? NaN);
       const selectedAge = Number.isFinite(selectedAgeRaw) ? selectedAgeRaw : null;
-      const selectedBirthDate = String((selectedCustomer as any)?.birth_date ?? "").trim();
-      if (!selectedGender || (!selectedBirthDate && selectedAge === null)) {
+      if (!selectedGender || selectedAge === null) {
         return toast.error("Selected customer is missing gender/age. Update profile in Customers first.");
       }
     }

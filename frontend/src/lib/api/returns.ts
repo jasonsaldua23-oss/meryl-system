@@ -1,7 +1,7 @@
 import { createRow, getRowById, listRows, removeRow, updateRow } from "./_common";
 import { supabase } from "../supabase";
 
-const RETURNS_JOIN = "*, sales_transaction:sales_transaction(*, customer:customer(*)), user:user(user_id, name, username, role_id, email, avatar_url, staff_code), return_details:return_details(*, product:product(*, category(*), inventory(*)))";
+const RETURNS_JOIN = "*, sales_transaction:sales_transaction(*, customer:customer(*)), user:user(user_id, name, username, role_id, email, avatar_url, staff_code), return_details:return_details(*, product:product_id(*, category(*), inventory(*)))";
 const RETURNS_DETAILS_JOIN = RETURNS_JOIN;
 
 export const returnsApi = {

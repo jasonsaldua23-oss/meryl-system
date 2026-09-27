@@ -64,64 +64,13 @@ def sync_sales_summary_entry(
     parse_iso_datetime,
     supabase,
 ):
-    def normalize_id(value):
-        return str(value or "").strip()
+    """No-op: sales_summary is kept up to date by the database itself.
 
-    if not table_exists("sales_summary"):
-        return
-
-    target_date = summary_date
-    if isinstance(target_date, str):
-        try:
-            target_date = datetime_cls.fromisoformat(target_date).date()
-        except ValueError:
-            target_date = datetime_cls.now().date()
-    if target_date is None:
-        target_date = datetime_cls.now().date()
-
-    completed_sales, _ = build_sale_status_maps()
-    sales_transactions = fetch_rows("sales_transaction")
-    sales_details = fetch_rows("sales_details")
-    details_by_sale = defaultdict_cls(list)
-    for detail in sales_details:
-        sale_id = normalize_id(detail.get("sales_id"))
-        if sale_id:
-            details_by_sale[sale_id].append(detail)
-
-    total_revenue = 0.0
-    total_transactions = 0
-    total_item_sold = 0
-    target_string = target_date.strftime("%Y-%m-%d")
-    for sale in sales_transactions:
-        sales_id = normalize_id(sale.get("sales_id"))
-        if sales_id not in completed_sales:
-            continue
-        sale_date = parse_iso_datetime(sale.get("transaction_date"))
-        if not sale_date or sale_date.strftime("%Y-%m-%d") != target_string:
-            continue
-        total_transactions += 1
-        total_revenue += safe_float(sale.get("total_amount"), 0)
-        total_item_sold += sum(safe_int(detail.get("quantity"), 0) for detail in details_by_sale.get(sales_id, []))
-
-    payload = {
-        "summary_date": target_string,
-        "total_revenue": round(total_revenue, 2),
-        "total_transaction": total_transactions,
-        "total_item_sold": total_item_sold,
-    }
-    existing = (
-        supabase.table("sales_summary")
-        .select("summary_id")
-        .eq("summary_date", target_string)
-        .limit(1)
-        .execute()
-        .data
-        or []
-    )
-    if existing:
-        supabase.table("sales_summary").update(payload).eq("summary_id", existing[0].get("summary_id")).execute()
-    else:
-        supabase.table("sales_summary").insert(payload).execute()
+    A trigger refreshes each store day (Asia/Manila) whenever a sale changes;
+    see database/phase6_stored_analytics_and_cleanup.sql. This older writer
+    used UTC dates and would overwrite those rows, so it no longer runs.
+    """
+    return
 
 
 def build_chart_points(items, label_key, value_key, min_height=72, max_height=240, *, safe_float):

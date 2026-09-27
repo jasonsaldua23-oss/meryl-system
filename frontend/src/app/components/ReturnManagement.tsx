@@ -33,7 +33,6 @@ type ReturnDetail = {
   quantity_returned: number;
   reason: string;
   customerReason: string;
-  refund_amount: number;
   replacementProductId: string;
   replacementProductName: string;
   replacementProductSize: string;
@@ -53,7 +52,6 @@ type ReturnRow = {
   customerName: string;
   return_date: string;
   returnDateTime: string;
-  total_refund: number;
   return_type: string;
   return_status: string;
   processedBy: string;
@@ -1393,7 +1391,6 @@ export function ReturnManagement() {
         customerName: customer?.name ?? "Walk-in Customer",
         return_date: formatStoreDate(recordMoment(row.return_date, row.created_at)),
         returnDateTime: formatStoreDateTime(recordMoment(row.return_date, row.created_at)),
-        total_refund: Number(row.total_refund ?? 0),
         return_type: String(row.return_type ?? "Replacement"),
         return_status: String(row.return_status ?? "Completed"),
         processedBy: processedUser?.name ?? processedUser?.username ?? "Staff",
@@ -1435,7 +1432,6 @@ export function ReturnManagement() {
             quantity_returned: returnedQty,
             reason: String(detail.reason ?? ""),
             customerReason: note.customerReason,
-            refund_amount: Number(detail.refund_amount ?? 0),
             replacementProductId: String(detail.replacement_product_id ?? detail.new_product_id ?? replacementFallback?.product_id ?? ""),
             replacementProductName: replacement?.product_name ?? replacementFallback?.name ?? (note.replacementName || "N/A"),
             replacementProductSize: String(replacement?.size ?? replacementFallback?.size ?? (note.replacementSize || "N/A")),
@@ -1727,41 +1723,20 @@ export function ReturnManagement() {
 
       const returnId = buildClientId();
       const receiptProof = await uploadReceiptProof(returnId);
-      const replacementSummary = [
-        "Replacement",
-        `Lines: ${lines.length}`,
-        `Receipt proof: ${receiptProof.receiptProofName}`,
-        "No refund/store credit. Replacement only.",
-        `Reason: ${finalReason}`,
-      ].join(" | ");
-
-      await tryInsertRow("returns", [
-        {
-          return_id: returnId,
-          sales_id: selectedSale.sales_id,
-          original_sales_id: selectedSale.sales_id,
-          user_id: user?.user_id ?? selectedSale.user_id,
-          return_date: new Date().toISOString(),
-          return_type: "Replacement",
-          return_status: "Completed",
-          total_refund: 0,
-          fulfilled_date: new Date().toISOString(),
-          replacement_count: lines.length,
-          last_activity_date: new Date().toISOString(),
-          receipt_proof_name: receiptProof.receiptProofName,
-          receipt_proof_path: receiptProof.receiptProofPath,
-          receipt_proof_url: receiptProof.receiptProofUrl,
-          receipt_verified_at: receiptProof.receiptVerifiedAt,
-          remarks: replacementSummary,
-        },
-        {
-          return_id: returnId,
-          sales_id: selectedSale.sales_id,
-          user_id: user?.user_id ?? selectedSale.user_id,
-          return_date: new Date().toISOString(),
-          total_refund: 0,
-        },
-      ]);
+      // Replacements are 1-to-1 with no refund, so no refund amount is stored.
+      // The last payload is for databases that still have the old required
+      // total_refund column (before phase6_stored_analytics_and_cleanup.sql).
+      const returnRow = {
+        return_id: returnId,
+        sales_id: selectedSale.sales_id,
+        user_id: user?.user_id ?? selectedSale.user_id,
+        return_date: new Date().toISOString(),
+        receipt_proof_name: receiptProof.receiptProofName,
+        receipt_proof_path: receiptProof.receiptProofPath,
+        receipt_proof_url: receiptProof.receiptProofUrl,
+        receipt_verified_at: receiptProof.receiptVerifiedAt,
+      };
+      await tryInsertRow("returns", [returnRow, { ...returnRow, total_refund: 0 }]);
 
       for (const line of lines) {
         const saleDetail = saleDetailById.get(line.sales_detail_id);
@@ -1782,40 +1757,24 @@ export function ReturnManagement() {
         // Price columns were dropped (1:1 exchanges carry no price difference), so they
         // must not be sent; otherwise every insert fell back to the note-only row and
         // the replacement product was never stored.
+        // The returned pair (product_id) and the pair given in exchange
+        // (new_product_id) are both stored as columns (manuscript Table 28).
         const baseDetail = {
           return_id: returnId,
           product_id: line.returned_product_id,
           quantity_returned: line.quantity,
           reason: replacementNote,
-          refund_amount: 0,
         };
         await tryInsertRow("return_details", [
           {
             ...baseDetail,
             return_detail_id: buildClientId(),
-            replacement_product_id: line.replacement_product_id,
-            replacement_quantity: line.quantity,
-            returned_product_id: line.returned_product_id,
-            returned_quantity: line.quantity,
             new_product_id: line.replacement_product_id,
             new_quantity: line.quantity,
             inventory_action: effectiveLineInventoryAction,
           },
-          {
-            ...baseDetail,
-            return_detail_id: buildClientId(),
-            replacement_product_id: line.replacement_product_id,
-            replacement_quantity: line.quantity,
-            inventory_action: effectiveLineInventoryAction,
-          },
-          {
-            return_detail_id: buildClientId(),
-            return_id: returnId,
-            product_id: line.returned_product_id,
-            quantity_returned: line.quantity,
-            reason: replacementNote,
-            refund_amount: 0,
-          },
+          // Databases not yet migrated: the note carries the replacement.
+          { ...baseDetail, return_detail_id: buildClientId(), refund_amount: 0 },
         ]);
 
         const nextReturnedQty = Number(saleDetail.returned_quantity ?? 0) + line.quantity;

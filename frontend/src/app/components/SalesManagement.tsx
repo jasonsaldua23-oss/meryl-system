@@ -159,7 +159,7 @@ export function SalesManagement() {
       if (!salesId) continue;
       const prev = map.get(salesId) ?? { count: 0, additional: 0, credits: 0, lastActivity: null, details: [] };
       const details = Array.isArray(replacement.return_details) ? replacement.return_details : [];
-      const credits = Number(replacement.total_refund ?? replacement.total_credits_issued ?? 0);
+      const credits = 0; // Replacements are 1-to-1: no refunds or store credit.
       const activityDate = String(replacement.last_activity_date ?? replacement.return_date ?? replacement.created_at ?? "");
       const prevTs = prev.lastActivity ? new Date(prev.lastActivity).getTime() : 0;
       const nextTs = activityDate ? new Date(activityDate).getTime() : 0;
