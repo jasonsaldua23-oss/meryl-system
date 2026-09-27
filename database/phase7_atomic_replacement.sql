@@ -18,6 +18,8 @@
 -- refuses a replacement pair that is not in stock, and checks that each line
 -- belongs to the receipt, uses the same shoe model and does not exceed the
 -- pairs bought. The signed-in staff member is recorded as the processor.
+-- Store policy is enforced here too: one replacement per receipt, within
+-- 7 days of purchase (Figure 27).
 -- ==============================================================================
 
 begin;
@@ -34,6 +36,7 @@ returns jsonb
 language plpgsql
 security definer
 set search_path = public
+set timezone = 'UTC'
 as $$
 declare
   v_user uuid := public.app_current_user_id();
@@ -51,6 +54,8 @@ declare
   v_replacement_name text;
   v_available integer;
   v_count integer := 0;
+  v_purchased_at timestamptz;
+  v_days integer;
 begin
   if v_user is null then
     raise exception 'Your session has expired. Please sign in again.';
@@ -63,12 +68,23 @@ begin
   end if;
 
   -- Lock the sale so two staff cannot replace the same receipt at once.
-  perform 1 from public.sales_transaction where sales_id = p_sales_id for update;
+  select transaction_date::timestamptz into v_purchased_at
+  from public.sales_transaction where sales_id = p_sales_id for update;
   if not found then
     raise exception 'Receipt not found.';
   end if;
   if exists (select 1 from public.returns where return_id = v_return_id) then
     raise exception 'This replacement was already saved.';
+  end if;
+
+  -- Store policy (manuscript Figure 27): one replacement per receipt, within
+  -- 7 calendar days of the purchase date (store time, Asia/Manila).
+  if exists (select 1 from public.returns where sales_id = p_sales_id) then
+    raise exception 'This receipt already has a replacement. Only one replacement is allowed per receipt.';
+  end if;
+  v_days := (now() at time zone 'Asia/Manila')::date - (v_purchased_at at time zone 'Asia/Manila')::date;
+  if v_days > 7 then
+    raise exception 'Replacements are accepted within 7 days of purchase. This receipt is % days old.', v_days;
   end if;
 
   insert into public.returns (

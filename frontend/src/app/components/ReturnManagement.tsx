@@ -187,6 +187,9 @@ function withStaffCode(name: string, code?: string) {
   return cleanCode && cleanCode !== "N/A" ? `${name} (${cleanCode})` : name;
 }
 
+/** Store policy: replacements within 7 days of purchase, one per receipt. */
+const REPLACEMENT_WINDOW_DAYS = 7;
+
 function normalizeProductName(value: string) {
   return String(value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
 }
@@ -741,12 +744,15 @@ export function ReturnManagement() {
     const customerName = customer?.name ?? "Walk-in Customer";
     const totalAmount = Number(matchedSale.total_amount ?? 0);
     const purchaseDate = matchedSale.transaction_date ? formatDate(matchedSale.transaction_date) : "N/A";
-    const txnTime = new Date(matchedSale.transaction_date ?? "").getTime();
-    const daysAgo = Number.isNaN(txnTime) ? 0 : Math.max(0, Math.floor((Date.now() - txnTime) / (1000 * 60 * 60 * 24)));
+    // Calendar days in store time (Asia/Manila), the same rule the database
+    // enforces in process_replacement: eligible up to 7 days after the purchase date.
+    const storeDay = (value: Date) => Date.parse(new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila" }).format(value));
+    const txnDate = parseDbTimestamp(matchedSale.transaction_date) ?? new Date(matchedSale.transaction_date ?? "");
+    const daysAgo = Number.isNaN(txnDate.getTime()) ? 0 : Math.max(0, Math.round((storeDay(new Date()) - storeDay(txnDate)) / 86400000));
 
-    // 2. Check previous replacement and 7-day policy status (both are permitted to proceed)
+    // 2. Store policy (manuscript Figure 27): one replacement per receipt, within 7 days.
     const isAlreadyReplaced = replacedSalesIds.has(saleId);
-    const isExpired = daysAgo > 7;
+    const isExpired = daysAgo > REPLACEMENT_WINDOW_DAYS;
 
     const rawDetails = Array.isArray(matchedSale.sales_details) ? matchedSale.sales_details : [];
     const totalSoldItems = rawDetails.reduce((acc: number, d: any) => acc + Number(d.quantity ?? 1), 0);
@@ -762,10 +768,10 @@ export function ReturnManagement() {
 
     if (isAlreadyReplaced) {
       validationState = "already_replaced";
-      statusMessage = `Receipt was previously replaced. Repeat replacement is permitted — you may proceed to select items and finalize.`;
+      statusMessage = `This receipt already has a replacement. Only one replacement is allowed per receipt.`;
     } else if (isExpired) {
       validationState = "expired_warning";
-      statusMessage = `Receipt found (${daysAgo} days ago, exceeds standard 7-day policy). Replacement is permitted — you may proceed.`;
+      statusMessage = `Purchased ${daysAgo} days ago. Replacements are only accepted within ${REPLACEMENT_WINDOW_DAYS} days of purchase.`;
     } else {
       validationState = "valid";
       statusMessage = `Receipt verified! Purchased ${daysAgo === 0 ? "today" : `${daysAgo} day${daysAgo > 1 ? "s" : ""} ago`} • Within return policy.`;
@@ -782,14 +788,13 @@ export function ReturnManagement() {
       message: statusMessage,
     });
 
-    // Auto-select this sale for Step 2 regardless of 7 days or prior replacement
-    selectSaleForReturn(saleId);
-
     if (isAlreadyReplaced) {
-      toast.info(`Receipt ${receiptDisplay} was previously replaced. Repeat replacement is allowed.`);
+      toast.error(`Receipt ${receiptDisplay} was already replaced. Only one replacement per receipt.`);
     } else if (isExpired) {
-      toast.info(`Receipt ${receiptDisplay} exceeds 7-day policy (${daysAgo} days ago). Replacement is allowed.`);
+      toast.error(`Receipt ${receiptDisplay} is ${daysAgo} days old. Replacements are accepted within ${REPLACEMENT_WINDOW_DAYS} days.`);
     } else {
+      // Only an eligible receipt moves on to Step 2.
+      selectSaleForReturn(saleId);
       toast.success(`Receipt ${receiptDisplay} verified successfully!`);
     }
   };
@@ -2167,7 +2172,7 @@ export function ReturnManagement() {
                             </div>
                           </div>
                           <p className="text-[11px] text-emerald-200/90 pt-2 border-t border-emerald-500/20">
-                            <span className="font-semibold text-emerald-300">Replacement Policy:</span> Receipt verified. Exchanges and repeat replacements are enabled.
+                            <span className="font-semibold text-emerald-300">Replacement Policy:</span> One 1-to-1 replacement per receipt, within 7 days of purchase. No cash refunds.
                           </p>
                         </div>
                       )}
@@ -2178,7 +2183,7 @@ export function ReturnManagement() {
                             <div className="flex items-center gap-2">
                               <CheckCircle2 className="w-5 h-5 text-amber-400 shrink-0" />
                               <span className="text-amber-300 font-semibold text-sm">
-                                Policy Notice — {receiptValidationStatus.displayId}
+                                Replacement Period Over — {receiptValidationStatus.displayId}
                               </span>
                             </div>
                             <div className="flex items-center gap-2">
@@ -2189,12 +2194,12 @@ export function ReturnManagement() {
                                 </Badge>
                               )}
                               <Badge className="bg-amber-500/20 text-amber-200 border-amber-400/40 text-[11px]">
-                                {receiptValidationStatus.daysAgo} Days Ago (&gt;7 Days) • Replacement Allowed
+                                {receiptValidationStatus.daysAgo} Days Ago (&gt;7 Days) • Not Eligible
                               </Badge>
                             </div>
                           </div>
                           <p className="text-xs text-amber-200/90">
-                            {receiptValidationStatus.message} Transaction loaded successfully; replacement is permitted.
+                            {receiptValidationStatus.message}
                           </p>
                           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs pt-1 border-t border-amber-500/20">
                             <div>
@@ -2210,7 +2215,7 @@ export function ReturnManagement() {
                               <span className="text-amber-300 font-semibold">{formatCurrency(receiptValidationStatus.totalAmount ?? 0)}</span>
                             </div>
                             <div>
-                              <span className="text-amber-400/70 block">Eligible Items:</span>
+                              <span className="text-amber-400/70 block">Items on Receipt:</span>
                               <span className="text-amber-100 font-medium">{receiptValidationStatus.returnableCount} unit(s)</span>
                             </div>
                           </div>
@@ -2223,7 +2228,7 @@ export function ReturnManagement() {
                             <div className="flex items-center gap-2">
                               <CheckCircle2 className="w-5 h-5 text-blue-400 shrink-0" />
                               <span className="text-blue-300 font-semibold text-sm">
-                                Previously Replaced Receipt — {receiptValidationStatus.displayId}
+                                Already Replaced — {receiptValidationStatus.displayId}
                               </span>
                             </div>
                             <div className="flex items-center gap-2">
@@ -2234,7 +2239,7 @@ export function ReturnManagement() {
                                 </Badge>
                               )}
                               <Badge className="bg-blue-500/20 text-blue-200 border-blue-400/40 text-[11px]">
-                                Repeat Replacement Allowed
+                                Already Replaced • Not Eligible
                               </Badge>
                               {receiptValidationStatus.daysAgo !== undefined && receiptValidationStatus.daysAgo > 7 && (
                                 <Badge className="bg-amber-500/20 text-amber-200 border-amber-400/40 text-[11px]">
@@ -2244,7 +2249,7 @@ export function ReturnManagement() {
                             </div>
                           </div>
                           <p className="text-xs text-blue-200/90">
-                            {receiptValidationStatus.message} Transaction loaded successfully — select items and finalize below.
+                            {receiptValidationStatus.message}
                           </p>
                           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs pt-1 border-t border-blue-500/20">
                             <div>
@@ -2260,7 +2265,7 @@ export function ReturnManagement() {
                               <span className="text-blue-300 font-semibold">{formatCurrency(receiptValidationStatus.totalAmount ?? 0)}</span>
                             </div>
                             <div>
-                              <span className="text-blue-400/70 block">Eligible Items:</span>
+                              <span className="text-blue-400/70 block">Items on Receipt:</span>
                               <span className="text-blue-100 font-medium">{receiptValidationStatus.returnableCount} unit(s)</span>
                             </div>
                           </div>
