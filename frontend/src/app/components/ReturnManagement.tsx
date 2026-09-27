@@ -325,26 +325,6 @@ async function decodeQrFromImageFile(file: File): Promise<string | null> {
   });
 }
 
-async function tryUpdateById(table: string, idColumn: string, id: string, payloads: Record<string, any>[]) {
-  let lastError: any = null;
-  for (const payload of payloads) {
-    const { error } = await supabase.from(table as any).update(payload).eq(idColumn as any, id);
-    if (!error) return;
-    lastError = error;
-  }
-  if (lastError) throw lastError;
-}
-
-async function tryInsertRow(table: string, payloads: Record<string, any>[]) {
-  let lastError: any = null;
-  for (const payload of payloads) {
-    const { error } = await supabase.from(table as any).insert(payload);
-    if (!error) return;
-    lastError = error;
-  }
-  if (lastError) throw lastError;
-}
-
 function isMissingTableError(error: any) {
   const message = String(error?.message ?? "").toLowerCase();
   return message.includes("could not find the table") || message.includes("relation") && message.includes("does not exist");
@@ -1451,48 +1431,6 @@ export function ReturnManagement() {
     [displayReturns, isAdmin, user?.user_id],
   );
 
-  const updateInventoryStock = async (productId: string, quantityDelta: number) => {
-    const product = productMap.get(productId);
-    if (!product) throw new Error("Product inventory not found");
-
-    const nextStock = Math.max(0, Number(product.stock ?? 0) + quantityDelta);
-    if (product.inventory_id) {
-      const { error } = await supabase
-        .from("inventory")
-        .update({ stock_quantity: nextStock, last_updated: new Date().toISOString() })
-        .eq("inventory_id", product.inventory_id);
-      if (error) throw error;
-      return;
-    }
-
-    const { error } = await supabase.from("inventory").insert({
-      inventory_id: buildClientId(),
-      product_id: productId,
-      stock_quantity: nextStock,
-      reorder_level: product.reorder_level,
-      last_updated: new Date().toISOString(),
-    });
-    if (error) throw error;
-  };
-
-  const createInventoryLog = async (productId: string, quantityChange: number, transactionType: string, referenceId: string) => {
-    const normalized = String(transactionType ?? "").trim().toLowerCase();
-    const dbTransactionType =
-      normalized === "return" || normalized === "restock" || normalized === "sale" || normalized === "adjustment"
-        ? normalized
-        : "adjustment";
-    await tryInsertRow("inventory_log", [
-      {
-        inventory_log_id: buildClientId(),
-        product_id: productId,
-        quantity_change: quantityChange,
-        transaction_type: dbTransactionType,
-        reference_id: referenceId,
-        date_updated: new Date().toISOString(),
-      },
-    ]);
-  };
-
   const handleReceiptProofChange = async (file?: File | null) => {
     if (!file) return;
     if (!file.type.startsWith("image/")) {
@@ -1723,103 +1661,44 @@ export function ReturnManagement() {
 
       const returnId = buildClientId();
       const receiptProof = await uploadReceiptProof(returnId);
-      // Replacements are 1-to-1 with no refund, so no refund amount is stored.
-      // The last payload is for databases that still have the old required
-      // total_refund column (before phase6_stored_analytics_and_cleanup.sql).
-      const returnRow = {
-        return_id: returnId,
-        sales_id: selectedSale.sales_id,
-        user_id: user?.user_id ?? selectedSale.user_id,
-        return_date: new Date().toISOString(),
-        receipt_proof_name: receiptProof.receiptProofName,
-        receipt_proof_path: receiptProof.receiptProofPath,
-        receipt_proof_url: receiptProof.receiptProofUrl,
-        receipt_verified_at: receiptProof.receiptVerifiedAt,
-      };
-      await tryInsertRow("returns", [returnRow, { ...returnRow, total_refund: 0 }]);
 
-      for (const line of lines) {
-        const saleDetail = saleDetailById.get(line.sales_detail_id);
-        if (!saleDetail) continue;
-        const effectiveLineInventoryAction = isUnsellableReason
-          ? "Defective / Not Sellable"
-          : line.inventory_action;
-
-        const replacementNote = [
-          "Replacement",
-          `Replaced: ${line.returned_product_name}`,
-          `Replacement: ${line.replacement_product_name}`,
-          "Rule: Even exchange",
-          `Inventory action: ${effectiveLineInventoryAction}`,
-          `Reason: ${finalReason}`,
-        ].join(" | ");
-
-        // Price columns were dropped (1:1 exchanges carry no price difference), so they
-        // must not be sent; otherwise every insert fell back to the note-only row and
-        // the replacement product was never stored.
-        // The returned pair (product_id) and the pair given in exchange
-        // (new_product_id) are both stored as columns (manuscript Table 28).
-        const baseDetail = {
-          return_id: returnId,
-          product_id: line.returned_product_id,
-          quantity_returned: line.quantity,
-          reason: replacementNote,
+      // One database transaction (process_replacement): the replacement, its
+      // lines, stock changes on the live stock values and the inventory log are
+      // saved together or not at all, and a pair that is out of stock is refused.
+      const replacementLines = lines.map((line) => {
+        const inventoryAction = isUnsellableReason ? "Defective / Not Sellable" : line.inventory_action;
+        return {
+          returned_product_id: line.returned_product_id,
+          replacement_product_id: line.replacement_product_id,
+          quantity: line.quantity,
+          inventory_action: inventoryAction,
+          note: [
+            "Replacement",
+            `Replaced: ${line.returned_product_name}`,
+            `Replacement: ${line.replacement_product_name}`,
+            "Rule: Even exchange",
+            `Inventory action: ${inventoryAction}`,
+            `Reason: ${finalReason}`,
+          ].join(" | "),
         };
-        await tryInsertRow("return_details", [
-          {
-            ...baseDetail,
-            return_detail_id: buildClientId(),
-            new_product_id: line.replacement_product_id,
-            new_quantity: line.quantity,
-            inventory_action: effectiveLineInventoryAction,
-          },
-          // Databases not yet migrated: the note carries the replacement.
-          { ...baseDetail, return_detail_id: buildClientId(), refund_amount: 0 },
-        ]);
-
-        const nextReturnedQty = Number(saleDetail.returned_quantity ?? 0) + line.quantity;
-        const isFullyReturnedItem = nextReturnedQty >= Number(saleDetail.quantity ?? 0);
-        try {
-          await tryUpdateById("sales_details", "sales_detail_id", line.sales_detail_id, [
-            {
-              returned_quantity: nextReturnedQty,
-              replacement_product_id: line.replacement_product_id,
-              item_status: isFullyReturnedItem ? "Replaced" : "Partially Replaced",
-            },
-          ]);
-        } catch {
-          // Older schemas may not have return-tracking columns on sales_details yet.
+      });
+      const { error: replacementError } = await (supabase as any).rpc("process_replacement", {
+        p_return_id: /^[0-9a-f-]{36}$/i.test(returnId) ? returnId : null,
+        p_sales_id: selectedSale.sales_id,
+        p_lines: replacementLines,
+        p_receipt: {
+          name: receiptProof.receiptProofName,
+          path: receiptProof.receiptProofPath,
+          url: receiptProof.receiptProofUrl,
+          verified_at: receiptProof.receiptVerifiedAt,
+        },
+      });
+      if (replacementError) {
+        if (replacementError.code === "PGRST202" || replacementError.code === "42883") {
+          throw new Error("Replacements need a database update. Ask the administrator to run database/phase7_atomic_replacement.sql.");
         }
-
-        if (effectiveLineInventoryAction === "Return to Stock") {
-          if (line.replacement_product_id !== line.returned_product_id) {
-            await updateInventoryStock(line.returned_product_id, line.quantity);
-            await createInventoryLog(line.returned_product_id, line.quantity, "return", returnId);
-            await updateInventoryStock(line.replacement_product_id, -line.quantity);
-            await createInventoryLog(line.replacement_product_id, -line.quantity, "adjustment", returnId);
-          } else {
-            await createInventoryLog(line.replacement_product_id, 0, "adjustment", returnId);
-          }
-        } else {
-          await updateInventoryStock(line.replacement_product_id, -line.quantity);
-          await createInventoryLog(line.replacement_product_id, -line.quantity, "adjustment", returnId);
-        }
+        throw new Error(replacementError.message);
       }
-
-      await tryUpdateById("sales_transaction", "sales_id", selectedSale.sales_id, [
-        {
-          original_total_amount: Number(selectedSale.total_amount ?? 0),
-          adjusted_total_amount: Number(selectedSale.total_amount ?? 0),
-          total_amount: Number(selectedSale.total_amount ?? 0),
-          sales_status: "Adjusted",
-          return_status: "Completed",
-          updated_at: new Date().toISOString(),
-        },
-        {
-          total_amount: Number(selectedSale.total_amount ?? 0),
-          updated_at: new Date().toISOString(),
-        },
-      ]);
 
       // Policy: Replacement only. No store credit issuance and no cash refund.
 

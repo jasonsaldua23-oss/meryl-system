@@ -635,7 +635,9 @@ export function ProductManagement({ view, onViewChange }: ProductManagementProps
       last_updated: new Date().toISOString(),
     };
 
-    try {
+    // Previous way of saving (writes the on-screen stock + stock-in). Used only
+    // until database/phase7_atomic_replacement.sql adds save_inventory_settings.
+    const saveWithoutDatabaseFunction = async () => {
       if (product.inventory_id) {
         const { error } = await supabase
           .from("inventory")
@@ -674,6 +676,25 @@ export function ProductManagement({ view, onViewChange }: ProductManagementProps
           date_updated: new Date().toISOString(),
         });
         if (holdLogError) throw holdLogError;
+      }
+    };
+
+    try {
+      // Adds the stock-in to the live stock in the database (row locked), so a
+      // sale made after this page loaded is never overwritten.
+      const { error: settingsError } = await (supabase as any).rpc("save_inventory_settings", {
+        p_product_id: product.product_id,
+        p_stock_in: Number(stockForm.stock_in || 0),
+        p_reserved_quantity: nextReserved,
+        p_reorder_level: Number(stockForm.reorder_level || 0),
+        p_srp: computedSrp,
+        p_status: toDbStatus(stockForm.status),
+        p_manufacturer_date: stockForm.manufacturer_date || null,
+        p_expiration_date: stockForm.expiration_date || null,
+      });
+      if (settingsError) {
+        if (settingsError.code !== "PGRST202" && settingsError.code !== "42883") throw new Error(settingsError.message);
+        await saveWithoutDatabaseFunction();
       }
 
       logAuditEvent({

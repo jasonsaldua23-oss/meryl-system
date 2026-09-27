@@ -15,6 +15,7 @@ import {
   setAppSessionToken,
   supabase,
 } from "./supabase";
+import { toast } from "sonner";
 import { logAuditEvent } from "./api/audit-logger";
 import {
   getStoredAvatarSync,
@@ -573,6 +574,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       subscription.unsubscribe();
     };
   }, [completeExternalAuth]);
+
+  // A session lasts 12 hours and can be revoked (logout elsewhere, account
+  // deactivated). Once it is gone every request is refused and pages would
+  // just look empty, so check every 2 minutes and on focus, and sign out with
+  // a clear message instead.
+  useEffect(() => {
+    const userId = user?.user_id;
+    if (!userId) return;
+    let stopped = false;
+    const check = async () => {
+      if (stopped || document.visibilityState !== "visible") return;
+      try {
+        const { data, error } = await (supabase as any).rpc("app_whoami");
+        if (stopped || error) return; // offline or older database: keep working
+        if (!data?.user_id || String(data.user_id) !== String(userId)) {
+          revokeAppSession();
+          clearStoredUser();
+          sessionStorage.removeItem(MERYL_TERMINAL_LOCKED_KEY);
+          setIsLocked(false);
+          setUser(null);
+          toast.error("Your session has expired. Please sign in again.");
+        }
+      } catch {
+        // Network hiccup: try again on the next check.
+      }
+    };
+    const timer = window.setInterval(check, 120000);
+    window.addEventListener("focus", check);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", check);
+    };
+  }, [user?.user_id]);
 
   // Synchronize avatar updates across components or tabs in real-time
   useEffect(() => {

@@ -411,7 +411,11 @@ export function PointOfSale() {
       const reservedQuantity = Number(inventory?.reserved_quantity ?? inventory?.held_stock ?? 0);
       const availableStock = Math.max(0, onHandStock - reservedQuantity);
       const expirationDate = inventory?.expiration_date ? String(inventory.expiration_date).slice(0, 10) : null;
-      const status = String(row.status ?? "active").toLowerCase();
+      // Product List switches items on/off through inventory_status; an archived
+      // product is also inactive. Either one hides it here (and complete_sale refuses it).
+      const productStatus = String(row.status ?? "active").toLowerCase();
+      const inventoryStatus = String(inventory?.inventory_status ?? productStatus).trim().toLowerCase();
+      const status = productStatus === "inactive" ? "inactive" : inventoryStatus || productStatus;
       const expired = Boolean(expirationDate && new Date(expirationDate).getTime() < Date.now());
 
       variants.push({
@@ -1184,7 +1188,23 @@ export function PointOfSale() {
     return { customer_id: created.customer_id as string, label: (created.name as string) || name };
   };
 
+  // One checkout at a time: a double-click or a second click while the first
+  // request is still running would otherwise record the sale twice.
+  const paymentInFlightRef = useRef(false);
+  const [isPaying, setIsPaying] = useState(false);
   const processPayment = async () => {
+    if (paymentInFlightRef.current) return;
+    paymentInFlightRef.current = true;
+    setIsPaying(true);
+    try {
+      await submitPayment();
+    } finally {
+      paymentInFlightRef.current = false;
+      setIsPaying(false);
+    }
+  };
+
+  const submitPayment = async () => {
     if (!user?.user_id) return toast.error("No logged in user");
     if (cart.length === 0) return toast.error("Cart is empty");
 
@@ -2204,9 +2224,9 @@ function formatReceiptNumber(salesId?: string) {
                 </div>
               )}
 
-              <Button onClick={processPayment} disabled={cart.length === 0} className="w-full h-11 bg-yellow-400 text-red-950 hover:bg-yellow-500 font-bold text-sm rounded-xl shadow-lg disabled:opacity-40 flex items-center justify-center gap-2">
+              <Button onClick={processPayment} disabled={cart.length === 0 || isPaying} className="w-full h-11 bg-yellow-400 text-red-950 hover:bg-yellow-500 font-bold text-sm rounded-xl shadow-lg disabled:opacity-40 flex items-center justify-center gap-2">
                 <Receipt className="w-4 h-4" />
-                Complete Payment & Checkout
+                {isPaying ? "Processing payment…" : "Complete Payment & Checkout"}
               </Button>
             </div>
           </CardContent>
