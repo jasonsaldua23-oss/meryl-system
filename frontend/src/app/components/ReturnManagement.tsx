@@ -700,31 +700,42 @@ export function ReturnManagement() {
     // Strip out enclosing asterisks (e.g. *RCP-20260501-C425*) or quotes
     const cleanQuery = rawQuery.replace(/^[\*"'`\s]+|[\*"'`\s]+$/g, "").trim();
     const q = cleanQuery.toLowerCase();
-    const cleanDigits = q.replace(/\D/g, "");
-    const qLastFour = q.replace(/[^a-z0-9]/g, "").slice(-4);
 
-    // 1. Search in all sales (by Sales ID UUID, Display ID RCP-xxx, Official Receipt Number, or Suffix)
-    const matchedSale = sales.find((s: any) => {
+    // 1. Exact match on the official receipt number printed in the QR code
+    //    (RCP-YYYYMMDD-XXXX), the sale ID, or the short list number (RCP-001).
+    //    A loose "contains" match used to pick the wrong sale: once there were
+    //    202+ sales, every 2026 receipt contained "rcp-202".
+    const keysFor = (s: any) => {
       const saleId = String(s.sales_id ?? "").toLowerCase();
-      const displayId = (salesDisplayMap.get(String(s.sales_id ?? "")) ?? "").toLowerCase();
-      const rcpNum = formatReceiptNumber(s.sales_id, s.transaction_date).toLowerCase();
-      const lastFour = saleId.replace(/[^a-z0-9]/g, "").slice(-4);
-      const displayDigits = displayId.replace(/\D/g, "");
-
-      return (
-        displayId === q ||
-        saleId === q ||
-        rcpNum === q ||
-        displayId.includes(q) ||
-        saleId.includes(q) ||
-        rcpNum.includes(q) ||
-        q.includes(saleId) ||
-        q.includes(displayId) ||
-        q.includes(rcpNum) ||
-        (lastFour.length === 4 && (qLastFour === lastFour || q.endsWith(lastFour) || q.includes(lastFour))) ||
-        (cleanDigits.length > 0 && (displayDigits === cleanDigits || cleanDigits.endsWith(displayDigits) || saleId.includes(cleanDigits)))
-      );
+      return {
+        saleId,
+        displayId: (salesDisplayMap.get(String(s.sales_id ?? "")) ?? "").toLowerCase(),
+        rcpNum: formatReceiptNumber(s.sales_id, s.transaction_date).toLowerCase(),
+        lastFour: saleId.replace(/[^a-z0-9]/g, "").slice(-4),
+      };
+    };
+    let matchedSale: any = sales.find((s: any) => {
+      const k = keysFor(s);
+      return q === k.rcpNum || q === k.saleId || (k.displayId !== "" && q === k.displayId);
     });
+
+    // 2. Otherwise a partial entry (e.g. the last 4 characters "C425", or the
+    //    start of a sale ID) is accepted only if exactly one receipt fits.
+    if (!matchedSale) {
+      const compact = q.replace(/[^a-z0-9]/g, "");
+      const candidates = compact.length >= 4
+        ? sales.filter((s: any) => {
+            const k = keysFor(s);
+            return k.rcpNum.replace(/[^a-z0-9]/g, "").endsWith(compact) || k.saleId.replace(/-/g, "").startsWith(compact);
+          })
+        : [];
+      if (candidates.length > 1) {
+        toast.error(`${candidates.length} receipts match "${cleanQuery}". Enter the full receipt number, e.g. RCP-20260926-C425.`);
+        setReceiptValidationStatus({ state: "not_found", message: `More than one receipt matches "${cleanQuery}". Enter the full receipt number.` });
+        return;
+      }
+      matchedSale = candidates[0];
+    }
 
     if (!matchedSale) {
       const displayQuery = rawQuery.length > 32 ? `${rawQuery.slice(0, 32)}...` : rawQuery;
@@ -1029,13 +1040,24 @@ export function ReturnManagement() {
           const scanConfig = {
             fps: 20,
             qrbox: (w: number, h: number) => {
-              const edge = Math.floor(Math.min(w, h) * 0.85);
+              // Never below the library's 50px minimum: if the scanner is closed
+              // while starting, a smaller box made it fail after opening the
+              // camera, leaving the camera on.
+              const edge = Math.max(50, Math.floor(Math.min(w, h) * 0.85));
               return { width: edge, height: edge };
             },
             aspectRatio: 1.0,
           };
 
           let started = false;
+          // The scanner may be closed while the camera is still starting; the
+          // cleanup has already run by then, so each start releases its own camera.
+          const releaseIfClosed = async (sc: Html5Qrcode) => {
+            if (isMounted) return false;
+            await sc.stop().catch(() => {});
+            try { sc.clear(); } catch {}
+            return true;
+          };
 
           // Attempt 1: Html5Qrcode using selectedCameraId or environment/user facingMode
           try {
@@ -1049,6 +1071,7 @@ export function ReturnManagement() {
                 (text) => handleDetectedQr(text),
                 () => {}
               );
+              if (await releaseIfClosed(scanner)) return;
               started = true;
             } else {
               try {
@@ -1059,6 +1082,7 @@ export function ReturnManagement() {
                   (text) => handleDetectedQr(text),
                   () => {}
                 );
+                if (await releaseIfClosed(scanner)) return;
                 started = true;
               } catch (envErr) {
                 console.warn("Rear camera start failed, trying front/webcam:", envErr);
@@ -1072,6 +1096,7 @@ export function ReturnManagement() {
                   (text) => handleDetectedQr(text),
                   () => {}
                 );
+                if (await releaseIfClosed(fallbackScanner)) return;
                 started = true;
               }
             }
@@ -1103,6 +1128,10 @@ export function ReturnManagement() {
             }
 
             if (!stream) throw new Error("Could not acquire camera video stream.");
+            if (!isMounted) {
+              stream.getTracks().forEach((t) => t.stop());
+              return;
+            }
             nativeStream = stream;
 
             const videoEl = document.createElement("video");
@@ -1117,7 +1146,8 @@ export function ReturnManagement() {
             started = true;
           }
 
-          if (isMounted && started) {
+          if (!isMounted) return;
+          if (started) {
             setCameraLoading(false);
             setQrScanError(null);
             handleTrackCaps();
