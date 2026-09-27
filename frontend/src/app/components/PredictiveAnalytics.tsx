@@ -199,16 +199,17 @@ function getCustomerGender(customer: any, fallbackProductGender?: string) {
   if (raw) {
     const normalized = raw.toLowerCase();
     if (normalized === "unisex" || normalized.includes("unisex")) return "Unisex";
-    if (normalized.includes("men") || normalized === "male" || normalized === "m") return "Men";
+    // Women before men: "women" contains "men".
     if (normalized.includes("women") || normalized === "female" || normalized === "f") return "Women";
+    if (normalized.includes("men") || normalized === "male" || normalized === "m") return "Men";
     if (normalized.includes("boy") || normalized.includes("girl") || normalized.includes("kid") || normalized.includes("child")) return "Kids";
     return raw;
   }
   if (fallbackProductGender) {
     const pNorm = String(fallbackProductGender).trim().toLowerCase();
     if (pNorm === "unisex" || pNorm.includes("unisex")) return "Unisex";
-    if (pNorm.includes("men") || pNorm === "male" || pNorm === "m") return "Men";
     if (pNorm.includes("women") || pNorm === "female" || pNorm === "f") return "Women";
+    if (pNorm.includes("men") || pNorm === "male" || pNorm === "m") return "Men";
     if (pNorm.includes("boy") || pNorm.includes("girl") || pNorm.includes("kid") || pNorm.includes("child")) return "Kids";
   }
   return "";

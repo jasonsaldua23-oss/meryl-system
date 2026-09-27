@@ -2100,11 +2100,9 @@ function formatReceiptNumber(salesId?: string) {
                             <SelectValue placeholder="Select gender" />
                           </SelectTrigger>
                           <SelectContent className="bg-[#15151f] border-[#2e2e3f] text-yellow-100 text-xs">
+                            {/* A customer's own gender; age covers children. */}
                             <SelectItem value="Male">Male</SelectItem>
                             <SelectItem value="Female">Female</SelectItem>
-                            <SelectItem value="Kids (Boy)">Kids (Boy)</SelectItem>
-                            <SelectItem value="Kids (Girl)">Kids (Girl)</SelectItem>
-                            <SelectItem value="Unisex">Unisex</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>

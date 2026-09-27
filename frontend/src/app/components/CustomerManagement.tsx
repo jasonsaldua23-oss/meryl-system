@@ -104,8 +104,9 @@ export function CustomerManagement() {
         }
 
         if (genderFilter !== "all") {
-          const g = (customer.gender ?? "").toLowerCase();
-          if (!g.includes(genderFilter.toLowerCase())) return false;
+          // Exact match: "female" contains "male", so a substring test mixed them up.
+          const g = (customer.gender ?? "").trim().toLowerCase();
+          if (g !== genderFilter.toLowerCase()) return false;
         }
 
         return true;
@@ -420,11 +421,9 @@ function CustomerForm({
             <SelectValue placeholder="Select gender" />
           </SelectTrigger>
           <SelectContent className="bg-zinc-950 border-zinc-800 text-zinc-100">
+            {/* A customer's own gender; age covers children. */}
             <SelectItem value="Male">Male</SelectItem>
             <SelectItem value="Female">Female</SelectItem>
-            <SelectItem value="Kids (Boy)">Kids (Boy)</SelectItem>
-            <SelectItem value="Kids (Girl)">Kids (Girl)</SelectItem>
-            <SelectItem value="Unisex">Unisex</SelectItem>
           </SelectContent>
         </Select>
       </div>
