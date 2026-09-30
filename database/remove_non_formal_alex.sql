@@ -14,30 +14,30 @@
 
 begin;
 
-create temporary table alex_remove on commit drop as
-select p.product_id, p.product_name, p.size,
-       exists (select 1 from public.sales_details d where d.product_id = p.product_id)
-       or exists (select 1 from public.return_details r where r.product_id = p.product_id or r.new_product_id = p.product_id)
-         as has_history
-from public.product p
-where lower(coalesce(p.brand, '')) = 'alex'
-  and lower(p.product_name) !~ '(school|formal|oxford|loafer|derby|dress|elegant|leather)';
-
--- Keep the ones with history, but take them off sale.
+-- 1. Take Alex non-formal models with sales or replacement history off sale.
 update public.product p
 set status = 'inactive', updated_at = now()
-from alex_remove a
-where a.product_id = p.product_id and a.has_history;
+where lower(coalesce(p.brand, '')) = 'alex'
+  and lower(p.product_name) !~ '(school|formal|oxford|loafer|derby|dress|elegant|leather)'
+  and (
+    exists (select 1 from public.sales_details d where d.product_id = p.product_id)
+    or exists (select 1 from public.return_details r where r.product_id = p.product_id or r.new_product_id = p.product_id)
+  );
 
 update public.inventory i
 set inventory_status = 'inactive', last_updated = now()
-from alex_remove a
-where a.product_id = i.product_id and a.has_history;
+from public.product p
+where p.product_id = i.product_id
+  and lower(coalesce(p.brand, '')) = 'alex'
+  and lower(p.product_name) !~ '(school|formal|oxford|loafer|derby|dress|elegant|leather)'
+  and p.status = 'inactive';
 
--- Delete the ones that were never sold or replaced.
+-- 2. Delete the ones that were never sold or replaced.
 delete from public.product p
-using alex_remove a
-where a.product_id = p.product_id and not a.has_history;
+where lower(coalesce(p.brand, '')) = 'alex'
+  and lower(p.product_name) !~ '(school|formal|oxford|loafer|derby|dress|elegant|leather)'
+  and not exists (select 1 from public.sales_details d where d.product_id = p.product_id)
+  and not exists (select 1 from public.return_details r where r.product_id = p.product_id or r.new_product_id = p.product_id);
 
 commit;
 
