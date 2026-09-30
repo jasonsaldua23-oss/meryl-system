@@ -2,6 +2,8 @@ from collections import defaultdict
 from datetime import datetime
 from datetime import timedelta, timezone
 import base64
+import hashlib
+import hmac
 from email.message import EmailMessage
 from html import escape
 import json
@@ -100,6 +102,8 @@ def sync_promotion_notifications(
         customer = customer_lookup.get(customer_id, {})
         if not str(customer.get("email") or "").strip():
             continue
+        if customer.get("promo_opt_out"):
+            continue  # unsubscribed from promotional emails
         notification_payloads.append(
             {
                 "customer_id": customer_id,
@@ -148,11 +152,33 @@ except OSError:
     _LOGO_BYTES = b""
 
 
-def _gmail_send_message(*, access_token, sender_email, sender_name, recipient_email, subject, html_content):
+def unsubscribe_token(customer_id, secret):
+    """Signature for a customer's unsubscribe link (HMAC, so links cannot be guessed)."""
+    return hmac.new(str(secret).encode("utf-8"), f"unsubscribe:{customer_id}".encode("utf-8"), hashlib.sha256).hexdigest()[:32]
+
+
+def verify_unsubscribe_token(customer_id, token, secret):
+    if not secret or not customer_id or not token:
+        return False
+    return hmac.compare_digest(unsubscribe_token(customer_id, secret), str(token))
+
+
+def unsubscribe_url(base_url, customer_id, secret):
+    if not base_url or not secret or not customer_id:
+        return ""
+    query = urllib.parse.urlencode({"c": customer_id, "t": unsubscribe_token(customer_id, secret)})
+    return f"{base_url.rstrip('/')}/api/promotions/unsubscribe?{query}"
+
+
+def _gmail_send_message(*, access_token, sender_email, sender_name, recipient_email, subject, html_content, unsubscribe_link=""):
     message = EmailMessage()
     message["To"] = recipient_email
     message["From"] = f"{sender_name} <{sender_email}>" if sender_name else sender_email
     message["Subject"] = subject
+    if unsubscribe_link:
+        # Lets Gmail and other apps show their own "Unsubscribe" button (RFC 8058 one-click).
+        message["List-Unsubscribe"] = f"<{unsubscribe_link}>"
+        message["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
     message.set_content(
         "This email contains a Meryl Shoes promotion. Please view it in an HTML-capable email app."
     )
@@ -428,6 +454,7 @@ def _build_promotion_email(
     target_products,
     product_rows,
     promo_product_rows,
+    unsubscribe_link="",
 ):
     kind = _campaign_kind(discount_type, promo_name)
     clean_name = _clean_promo_name(promo_name)
@@ -508,6 +535,7 @@ def _build_promotion_email(
         end_date=end_date,
         target_label=_target_label(target_products, matching_products, linked_product_ids=linked_product_ids),
         top_picks=top_picks,
+        unsubscribe_link=unsubscribe_link,
     )
 
     return {"subject": template["subject"], "html": html}
@@ -523,7 +551,7 @@ STORE_EMAIL_INFO = {
     "address": "Araneta Ave, Bacolod, 6100 Negros Occidental",
     "phone": "(034) 435 0128",
     "hours": "Open daily, 7:30 AM - 7:30 PM",
-    "maps_url": "https://www.google.com/maps/search/?api=1&query=Meryl+Shoes+Araneta+Ave+Bacolod",
+    "maps_url": "https://maps.app.goo.gl/jBPiubj4Y89b7aDh8",  # the store's Google Maps pin
 }
 _EMAIL_RED = "#D71920"
 _EMAIL_RED_DARK = "#A30F15"
@@ -625,7 +653,7 @@ def _pick_card(product, kind, discount_value):
 
 
 def _render_promotion_email(*, kind, template, campaign, discount, discount_value, customer_name,
-                            start_date, end_date, target_label, top_picks):
+                            start_date, end_date, target_label, top_picks, unsubscribe_link=""):
     store = STORE_EMAIL_INFO
     first_name = (str(customer_name or "").strip().split() or [""])[0]
     greeting = f"Hi {escape(first_name.title())}," if first_name else "Hi there,"
@@ -735,8 +763,12 @@ def _render_promotion_email(*, kind, template, campaign, discount, discount_valu
         f"Offer valid {window} on selected in-stock items while supplies last. "
         "One promotion per item. Replacements follow our 7-day, one-exchange policy; no cash refunds.<br>"
         "You are receiving this because you are a Meryl Shoes customer. "
-        "Reply &quot;unsubscribe&quot; to stop promotional emails."
-        "</div>"
+        + (
+            f"<a href='{escape(unsubscribe_link)}' style='color:#C9C9CF;text-decoration:underline'>Unsubscribe from promotional emails</a>."
+            if unsubscribe_link
+            else "Reply &quot;unsubscribe&quot; to stop promotional emails."
+        )
+        + "</div>"
         "</td></tr>"
 
         "</table>"
@@ -755,6 +787,8 @@ def send_promotion_notifications_via_gmail(
     client_id,
     client_secret,
     refresh_token,
+    unsubscribe_secret="",
+    public_base_url="",
 ):
     """
     Send promotion emails through Gmail API based on notification rows produced by
@@ -897,6 +931,24 @@ def send_promotion_notifications_via_gmail(
             )
             continue
 
+        if customer.get("promo_opt_out"):
+            # Unsubscribed after the campaign was queued: do not send, drop the row.
+            try:
+                supabase.table("notification").delete().eq("notification_id", row.get("notification_id")).execute()
+            except Exception:
+                pass
+            results.append(
+                {
+                    "notification_id": row.get("notification_id"),
+                    "customer_id": customer_id,
+                    "email": email,
+                    "status": "skipped",
+                    "reason": "Unsubscribed from promotional emails.",
+                }
+            )
+            continue
+
+        link = unsubscribe_url(public_base_url, customer_id, unsubscribe_secret)
         customer_name = str(customer.get("customer_name") or customer.get("name") or "there").strip()
         email_campaign = _build_promotion_email(
             customer_name=customer_name,
@@ -909,6 +961,7 @@ def send_promotion_notifications_via_gmail(
             target_products=target_products,
             product_rows=product_rows,
             promo_product_rows=promo_product_rows,
+            unsubscribe_link=link,
         )
 
         status = "sent"
@@ -920,6 +973,7 @@ def send_promotion_notifications_via_gmail(
                 recipient_email=email,
                 subject=email_campaign["subject"],
                 html_content=email_campaign["html"],
+                unsubscribe_link=link,
             )
             print(f"GMAIL: Email sent to {email}")
             sent += 1
@@ -970,6 +1024,7 @@ def send_promotion_notifications_via_gmail(
         "enabled": True,
         "sent": sent,
         "failed": failed,
+        "skipped": sum(1 for result in results if result.get("status") == "skipped"),
         "reason": "",
         "results": results,
         "errors": [result for result in results if result.get("status") == "failed"],

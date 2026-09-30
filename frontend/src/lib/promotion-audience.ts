@@ -30,6 +30,8 @@ export type AudienceCustomer = {
   age: number | null;
   purchases: number;
   isVip: boolean;
+  /** Unsubscribed from promotional emails (customer.promo_opt_out). */
+  optedOut: boolean;
 };
 
 function customerAge(row: any, now: Date): number | null {
@@ -78,6 +80,7 @@ export function buildAudience(customerRows: any[], salesRows: any[], now = new D
         age: customerAge(row, now),
         purchases: count,
         isVip: count >= VIP_MIN_PURCHASES,
+        optedOut: Boolean(row?.promo_opt_out),
       };
     });
 }
@@ -96,7 +99,8 @@ export function selectAudience(audience: AudienceCustomer[], filters: AudienceFi
   });
   const reachable = (c: AudienceCustomer) => /.+@.+\..+/.test(c.email) && !c.email.toLowerCase().endsWith("@walkin.local");
   return {
-    recipients: matching.filter(reachable),
+    recipients: matching.filter((c) => reachable(c) && !c.optedOut),
     withoutEmail: matching.filter((c) => !reachable(c)).length,
+    unsubscribed: matching.filter((c) => reachable(c) && c.optedOut).length,
   };
 }

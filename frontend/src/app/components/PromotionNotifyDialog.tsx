@@ -34,7 +34,7 @@ export function PromotionNotifyDialog({
   onSend: (customerIds: string[]) => void;
 }) {
   const [filters, setFilters] = useState<AudienceFilters>({ gender: "all", ageBracket: "all", vipOnly: false });
-  const { recipients, withoutEmail } = useMemo(() => selectAudience(audience, filters), [audience, filters]);
+  const { recipients, withoutEmail, unsubscribed } = useMemo(() => selectAudience(audience, filters), [audience, filters]);
   const preview = recipients.slice(0, 6);
 
   return (
@@ -93,6 +93,11 @@ export function PromotionNotifyDialog({
           {withoutEmail > 0 && (
             <p className="mt-1 text-xs text-white/50">
               {withoutEmail} matching customer{withoutEmail === 1 ? " has" : "s have"} no email address and will be skipped.
+            </p>
+          )}
+          {unsubscribed > 0 && (
+            <p className="mt-1 text-xs text-white/50">
+              {unsubscribed} matching customer{unsubscribed === 1 ? " has" : "s have"} unsubscribed from promotion emails and will not receive it.
             </p>
           )}
           {preview.length > 0 && (

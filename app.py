@@ -1,5 +1,6 @@
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from html import escape
 from functools import wraps
 import hashlib
 import hmac
@@ -103,6 +104,7 @@ from app_modules.analytics.app_promotions import (
     send_promotion_notifications_via_gmail as promotion_send_notifications_via_gmail,
     sync_promotion_notifications as promotion_sync_notifications,
     sync_promotion_products as promotion_sync_products,
+    verify_unsubscribe_token,
 )
 from app_modules.analytics.app_predictive import (
     build_predictive_context as predictive_build_context,
@@ -790,6 +792,84 @@ def send_promotion_notifications_via_gmail(promo_id):
         client_id=os.getenv("GMAIL_CLIENT_ID", "").strip(),
         client_secret=os.getenv("GMAIL_CLIENT_SECRET", "").strip(),
         refresh_token=os.getenv("GMAIL_REFRESH_TOKEN", "").strip(),
+        unsubscribe_secret=promotion_unsubscribe_secret(),
+        public_base_url=os.getenv("PUBLIC_BACKEND_URL", "").strip() or "https://meryl-system.onrender.com",
+    )
+
+
+def promotion_unsubscribe_secret():
+    # Signs unsubscribe links. The service-role key is secret and always set on
+    # the server (unlike SECRET_KEY, whose fallback value is in the repository).
+    return os.getenv("UNSUBSCRIBE_SECRET", "").strip() or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+
+
+def _unsubscribe_page(title, message, form_action=""):
+    button = (
+        f"<form method='post' action='{escape(form_action)}' style='margin:22px 0 0'>"
+        "<button type='submit' style='background:#D71920;color:#fff;border:0;border-radius:10px;"
+        "padding:13px 26px;font:bold 15px Arial,sans-serif;cursor:pointer'>Unsubscribe</button></form>"
+        if form_action
+        else ""
+    )
+    html = (
+        "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        f"<title>{escape(title)} - Meryl Shoes</title></head>"
+        "<body style='margin:0;background:#F2F1EE;font-family:Arial,Helvetica,sans-serif;color:#1B1B1F'>"
+        "<div style='max-width:460px;margin:48px auto;padding:0 16px'>"
+        "<div style='background:#fff;border-radius:16px;padding:32px 28px;text-align:center'>"
+        "<div style='font-size:13px;font-weight:bold;letter-spacing:3px;color:#D71920'>MERYL SHOES</div>"
+        f"<h1 style='font-size:22px;margin:14px 0 10px'>{escape(title)}</h1>"
+        f"<p style='font-size:15px;line-height:1.6;color:#3A3A40;margin:0'>{escape(message)}</p>"
+        f"{button}"
+        "</div>"
+        "<p style='font-size:12px;color:#6B6B73;text-align:center;margin-top:16px'>"
+        "Meryl Shoes &middot; Araneta Ave, Bacolod &middot; (034) 435 0128</p>"
+        "</div></body></html>"
+    )
+    return Response(html, mimetype="text/html")
+
+
+@app.route("/api/promotions/unsubscribe", methods=["GET", "POST"])
+def api_promotion_unsubscribe():
+    """Opt a customer out of promotional emails (Data Privacy Act, RA 10173).
+
+    GET shows a confirmation page (email security scanners open links, so a
+    plain visit must not unsubscribe). POST unsubscribes; it is also what Gmail's
+    one-click "Unsubscribe" button sends (List-Unsubscribe-Post).
+    """
+    customer_id = str(request.args.get("c") or "").strip()
+    token = str(request.args.get("t") or "").strip()
+    if not verify_unsubscribe_token(customer_id, token, promotion_unsubscribe_secret()):
+        return _unsubscribe_page(
+            "Link not valid",
+            "This unsubscribe link is incomplete or has expired. Please use the link from a recent Meryl Shoes email, "
+            "or call the store and we will remove you from our promotional emails.",
+        ), 400
+
+    if request.method == "GET":
+        return _unsubscribe_page(
+            "Stop promotional emails?",
+            "You will no longer receive sale and promotion emails from Meryl Shoes. "
+            "Your purchase history and receipts are not affected.",
+            form_action=request.full_path,
+        )
+
+    try:
+        supabase().table("customer").update(
+            {"promo_opt_out": True, "promo_opt_out_at": datetime.now(timezone.utc).isoformat()}
+        ).eq("customer_id", customer_id).execute()
+        supabase().table("notification").delete().eq("customer_id", customer_id).eq("email_status", "pending").execute()
+    except Exception:
+        logger.exception("Unsubscribe failed")
+        return _unsubscribe_page(
+            "Something went wrong",
+            "We could not update your preference right now. Please try again later or call the store.",
+        ), 500
+    return _unsubscribe_page(
+        "You are unsubscribed",
+        "You will no longer receive promotional emails from Meryl Shoes. "
+        "If this was a mistake, tell us at the store and we will add you back.",
     )
 
 

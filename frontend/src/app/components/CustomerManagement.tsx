@@ -22,6 +22,8 @@ type CustomerFormData = {
   gender: string;
   age: string;
   status: CustomerStatus;
+  /** Receives promotional emails (false = unsubscribed, customer.promo_opt_out). */
+  promoEmails: boolean;
 };
 
 const defaultForm: CustomerFormData = {
@@ -32,6 +34,7 @@ const defaultForm: CustomerFormData = {
   gender: "",
   age: "",
   status: "Active",
+  promoEmails: true,
 };
 
 function formatDate(value: string | null | undefined) {
@@ -140,8 +143,12 @@ export function CustomerManagement() {
       gender: customer.gender ?? "",
       age: customer.age != null ? String(customer.age) : "",
       status: (customer.status ?? "Active") as CustomerStatus,
+      promoEmails: !customer.promo_opt_out,
     });
   };
+
+  // Only send the opt-out fields once database/customer_promo_opt_out.sql has added them.
+  const optOutSupported = (customers as any[]).some((c) => c && "promo_opt_out" in c);
 
   const handleEditCustomer = async () => {
     if (!editingCustomerId) return;
@@ -156,6 +163,16 @@ export function CustomerManagement() {
           gender: formData.gender || null,
           age: formData.age ? Number(formData.age) : null,
           status: formData.status,
+          ...(optOutSupported
+            ? (() => {
+                const existing = (customers as any[]).find((c) => c.customer_id === editingCustomerId);
+                const optOut = !formData.promoEmails;
+                return {
+                  promo_opt_out: optOut,
+                  promo_opt_out_at: optOut ? existing?.promo_opt_out_at ?? new Date().toISOString() : null,
+                };
+              })()
+            : {}),
         } as any,
       });
       setEditingCustomerId(null);
@@ -312,6 +329,11 @@ export function CustomerManagement() {
                       <Badge className={(customer.status ?? "Active").toLowerCase() === "active" ? "bg-green-600 text-white" : "bg-gray-600 text-white"}>
                         {customer.status ?? "Active"}
                       </Badge>
+                      {customer.promo_opt_out ? (
+                        <div className="mt-1 text-[10px] text-yellow-200/70" title="Unsubscribed from promotional emails">
+                          No promo emails
+                        </div>
+                      ) : null}
                     </TableCell>
                     <TableCell>
                       <div className="flex justify-center gap-2">
@@ -452,6 +474,21 @@ function CustomerForm({
           className="bg-red-600 border-red-800 text-yellow-200"
         />
       </div>
+      <label htmlFor="promoEmails" className="flex items-start gap-3 rounded-lg border border-red-800 bg-red-600/40 p-3 cursor-pointer">
+        <input
+          id="promoEmails"
+          type="checkbox"
+          checked={formData.promoEmails}
+          onChange={(e) => setFormData({ ...formData, promoEmails: e.target.checked })}
+          className="mt-1 h-4 w-4 accent-yellow-400"
+        />
+        <span>
+          <span className="block text-sm font-semibold text-yellow-300">Send promotion emails</span>
+          <span className="block text-xs text-yellow-200/80">
+            Untick if the customer asked to stop receiving promotions. Customers can also unsubscribe with the link in any promotion email.
+          </span>
+        </span>
+      </label>
     </div>
   );
 }

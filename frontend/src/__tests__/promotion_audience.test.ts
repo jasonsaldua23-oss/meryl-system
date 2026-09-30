@@ -36,3 +36,15 @@ describe("promotion email audience (Use Case 9)", () => {
     expect(selectAudience(audience, { gender: "all", ageBracket: "all", vipOnly: true }).recipients.map((c) => c.customer_id)).toEqual(["b"]);
   });
 });
+
+describe("promotion email opt-out (Data Privacy Act)", () => {
+  it("never sends to customers who unsubscribed, and counts them", () => {
+    const rows = [
+      { customer_id: "x", name: "Xia", email: "xia@mail.com", gender: "Female", age: 30, status: "active", promo_opt_out: true },
+      { customer_id: "y", name: "Yul", email: "yul@mail.com", gender: "Male", age: 30, status: "active", promo_opt_out: false },
+    ];
+    const result = selectAudience(buildAudience(rows, [], NOW), { gender: "all", ageBracket: "all", vipOnly: false });
+    expect(result.recipients.map((c) => c.customer_id)).toEqual(["y"]);
+    expect(result.unsubscribed).toBe(1);
+  });
+});
