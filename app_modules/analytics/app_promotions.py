@@ -144,7 +144,7 @@ def _gmail_access_token(*, client_id, client_secret, refresh_token):
 # email (Content-ID) rather than linked, so it shows without "load images" and
 # does not depend on the website being reachable.
 LOGO_CID = "meryl-logo"
-_LOGO_PATH = os.path.join(os.path.dirname(__file__), "assets", "meryl_logo_email.jpg")
+_LOGO_PATH = os.path.join(os.path.dirname(__file__), "assets", "meryl_logo_email.png")
 try:
     with open(_LOGO_PATH, "rb") as _logo_file:
         _LOGO_BYTES = _logo_file.read()
@@ -185,7 +185,7 @@ def _gmail_send_message(*, access_token, sender_email, sender_name, recipient_em
     message.add_alternative(html_content, subtype="html")
     if _LOGO_BYTES and f"cid:{LOGO_CID}" in html_content:
         html_part = message.get_payload()[1]
-        html_part.add_related(_LOGO_BYTES, maintype="image", subtype="jpeg", cid=f"<{LOGO_CID}>", filename="meryl-shoes-logo.jpg")
+        html_part.add_related(_LOGO_BYTES, maintype="image", subtype="png", cid=f"<{LOGO_CID}>", filename="meryl-shoes-logo.png")
 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
     payload = json.dumps({"raw": raw}).encode("utf-8")
