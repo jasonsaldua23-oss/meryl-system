@@ -273,7 +273,7 @@ def build_predictive_context(
         )
     ][:4]
 
-    preferred_categories = ["Running Shoes", "Casual Shoes", "Basketball Shoes", "Sandals", "Kid", "Men", "Women"]
+    preferred_categories = ["Running Shoes", "Casual Shoes", "Basketball Shoes", "Formal Shoes", "Sandals"]
     chart_categories = [category for category in preferred_categories if category in category_totals_for_range]
     chart_categories.extend(
         category

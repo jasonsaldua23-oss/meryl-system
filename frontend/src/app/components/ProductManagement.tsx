@@ -282,7 +282,9 @@ export function ProductManagement({ view, onViewChange }: ProductManagementProps
 
   const categories = ((categoriesQuery.data as any[]) ?? []).filter((category: any) => {
     const name = String(category?.category_name ?? "").trim().toLowerCase();
-    return !["kid", "kids", "men", "women"].includes(name);
+    // Departments (Men / Women / Kids) live on the product, not as categories,
+    // and "Sport Shoes" was retired (database/recategorize_products.sql).
+    return !["kid", "kids", "men", "women", "sport shoes", "sports shoes"].includes(name);
   });
 
   const inventoryByProductId = useMemo(() => {
@@ -2202,7 +2204,19 @@ const PREDEFINED_BRANDS = [
   "Shoefit",
   "C-Speed",
   "Ultra Lite",
+  "Sandugo",
+  "Manjaru",
+  "Topsider",
 ];
+
+/** Brands the store carries for each category; shown first in the brand list. */
+const CATEGORY_BRANDS: Record<string, string[]> = {
+  "running shoes": ["Nike", "Adidas", "Asics", "New Balance", "C-Speed", "Ultra Lite"],
+  "basketball shoes": ["Nike", "Jordan", "Adidas", "Under Armour", "Puma"],
+  "casual shoes": ["Nike", "Adidas", "Puma", "Converse", "Vans", "Rocco", "MStyle"],
+  "formal shoes": ["Alex", "Topsider", "Rocco", "Venus", "Flamingos"],
+  sandals: ["Sandugo", "Manjaru"],
+};
 
 const STANDARD_COLORS = [
   { label: "Black", value: "Black", bg: "#09090b", border: "#3f3f46" },
@@ -2271,6 +2285,12 @@ function ProductMasterForm({
     }
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [products, formData.brand, isCustomBrand]);
+
+  const selectedCategoryName = String(
+    categories.find((c: any) => String(c.category_id) === String(formData.category_id))?.category_name ?? "",
+  ).trim();
+  const suggestedBrands = CATEGORY_BRANDS[selectedCategoryName.toLowerCase()] ?? [];
+  const otherBrands = availableBrands.filter((b) => !suggestedBrands.some((sb) => sb.toLowerCase() === b.toLowerCase()));
 
   const availableSizes = useMemo(() => {
     const list = [...STANDARD_SIZES];
@@ -2393,7 +2413,22 @@ function ProductMasterForm({
                 <SelectValue placeholder="Select Brand *" />
               </SelectTrigger>
               <SelectContent className="bg-[#181824] border-[#2d2d3a] text-yellow-100 max-h-64">
-                {availableBrands.map((b) => (
+                {suggestedBrands.length > 0 && (
+                  <div className="px-2 pt-1.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-yellow-400/80">
+                    {selectedCategoryName} brands
+                  </div>
+                )}
+                {suggestedBrands.map((b) => (
+                  <SelectItem key={`suggested-${b}`} value={b}>
+                    {b}
+                  </SelectItem>
+                ))}
+                {suggestedBrands.length > 0 && (
+                  <div className="px-2 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-yellow-200/50 border-t border-[#2d2d3a] mt-1">
+                    All brands
+                  </div>
+                )}
+                {otherBrands.map((b) => (
                   <SelectItem key={b} value={b}>
                     {b}
                   </SelectItem>

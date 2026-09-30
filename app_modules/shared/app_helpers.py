@@ -1,14 +1,14 @@
 from datetime import datetime
 
 
+# Product categories. Men / Women / Kids are departments (product.gender),
+# not categories.
 DEFAULT_CATEGORY_NAMES = [
     "Running Shoes",
     "Basketball Shoes",
     "Casual Shoes",
+    "Formal Shoes",
     "Sandals",
-    "Kid",
-    "Men",
-    "Women",
 ]
 
 STAFF_ROLES = {"sales_staff", "inventory_staff"}
