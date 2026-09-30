@@ -612,7 +612,7 @@ export function PromotionManagement() {
     return result as {
       ok: boolean;
       promo_id: string;
-      delivery?: { enabled?: boolean; sent?: number; failed?: number; reason?: string };
+      delivery?: { enabled?: boolean; sent?: number; failed?: number; skipped?: number; reason?: string };
       recipients?: Notification[];
     };
   };
@@ -1263,6 +1263,7 @@ export function PromotionManagement() {
       const recipients = (result.recipients || []) as Notification[];
       const sent = Number(result.delivery?.sent || 0);
       const failed = Number(result.delivery?.failed || 0);
+      const skipped = Number(result.delivery?.skipped || 0);
       setNotifications((prev) => [...prev, ...recipients]);
       setLastNotificationBatch(recipients);
       setLastNotificationPromo({ promo_name: notifyTarget.promo_name, start_date: notifyTarget.start_date, end_date: notifyTarget.end_date });
@@ -1271,10 +1272,13 @@ export function PromotionManagement() {
         actionType: 'send_promotion_notification',
         entityType: 'promotion',
         entityId: notifyTarget.promo_id,
-        metadata: { requested_recipients: customerIds.length, sent, failed },
+        metadata: { requested_recipients: customerIds.length, sent, failed, skipped },
       });
       if (result.delivery?.enabled) {
-        toast.success(`Emails sent: ${sent}, failed: ${failed}.`);
+        const parts = [`Emails sent: ${sent}`, `failed: ${failed}`];
+        if (skipped) parts.push(`not sent to ${skipped} unsubscribed customer${skipped === 1 ? "" : "s"}`);
+        if (sent > 0) toast.success(`${parts.join(", ")}. Delivery can take a minute; check the Promotions and Spam tabs too.`);
+        else toast.warning(`${parts.join(", ")}. No email was sent.`);
       } else {
         toast.warning(`Email sending is not available (${result.delivery?.reason || 'not configured'}).`);
       }
