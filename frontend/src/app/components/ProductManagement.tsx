@@ -488,6 +488,59 @@ export function ProductManagement({ view, onViewChange }: ProductManagementProps
     setIsProductDialogOpen(true);
   };
 
+  // Add sizes to an existing shoe (same model, brand, colour, department, category, cost).
+  const [addSizesFor, setAddSizesFor] = useState<UiProduct | null>(null);
+  const [newSizes, setNewSizes] = useState<string[]>([]);
+  const [isAddingSizes, setIsAddingSizes] = useState(false);
+  const existingSizesForShoe = useMemo(() => {
+    if (!addSizesFor) return new Set<string>();
+    const key = sameShoeKey(addSizesFor);
+    return new Set(products.filter((p) => sameShoeKey(p) === key).map((p) => String(p.size ?? "").trim()));
+  }, [addSizesFor, products]);
+
+  const openAddSizes = (product: UiProduct) => {
+    setAddSizesFor(product);
+    setNewSizes([]);
+  };
+
+  const saveNewSizes = async () => {
+    const product = addSizesFor;
+    if (!product || newSizes.length === 0) return;
+    const sizes = newSizes.filter((size) => !existingSizesForShoe.has(size));
+    if (!sizes.length) return toast.error("Those sizes already exist for this shoe.");
+    const color = product.color && product.color !== "Default" ? product.color : null;
+    const gender = product.gender && product.gender !== "N/A" ? product.gender : null;
+    const rows = sizes.map((size) => ({
+      product_name: product.name,
+      brand: product.brand === "N/A" ? null : product.brand,
+      category_id: product.category_id,
+      cost_price: Number(product.unit_price || 0),
+      color,
+      gender,
+      size,
+      image_url: product.image_url || null,
+    }));
+    try {
+      setIsAddingSizes(true);
+      const { error } = await supabase.from("product").insert(rows as any);
+      if (error) throw error;
+      logAuditEvent({
+        action_type: "PRODUCT_CREATED",
+        entity_type: "PRODUCT",
+        entity_id: product.name,
+        metadata: { added_sizes: sizes, color, department: gender },
+      });
+      await queryClient.invalidateQueries({ queryKey: ["products"] });
+      toast.success(`Added size${sizes.length === 1 ? "" : "s"} ${sizes.join(", ")} to ${product.name}. Set stock and price in Product Settings.`);
+      setAddSizesFor(null);
+      setNewSizes([]);
+    } catch (error: any) {
+      toast.error(error?.message ?? "Could not add the sizes.");
+    } finally {
+      setIsAddingSizes(false);
+    }
+  };
+
   const openSettingsForProduct = (product: UiProduct) => {
     setActiveTab("settings");
     setStockForm({
@@ -580,6 +633,13 @@ export function ProductManagement({ view, onViewChange }: ProductManagementProps
           toast.success(`Updated ${targetIds.length} variant${targetIds.length === 1 ? "" : "s"} (base fields only).`);
         }
       } else {
+        const newKey = sameShoeKey({ name: cleanProductName, brand: productForm.brand, color: productForm.color, gender: productForm.gender });
+        const duplicate = products.find(
+          (p) => sameShoeKey(p) === newKey && String(p.size ?? "").trim() === String(productForm.size ?? "").trim(),
+        );
+        if (duplicate) {
+          return toast.error(`${cleanProductName} size ${productForm.size} already exists in this colour. Use Product Settings to add stock.`);
+        }
         await productMutations.createMutation.mutateAsync(thisVariantPayload);
         logAuditEvent({
           action_type: "PRODUCT_CREATED",
@@ -1169,10 +1229,66 @@ export function ProductManagement({ view, onViewChange }: ProductManagementProps
             )}
 
             {activeTab === "list" ? (
-              <ProductListTable products={paginatedProducts} onEdit={openEditProduct} onConfigure={openSettingsForProduct} />
+              <ProductListTable products={paginatedProducts} onEdit={openEditProduct} onConfigure={openSettingsForProduct} onAddSizes={openAddSizes} />
             ) : (
               <InventoryTable products={paginatedProducts} onConfigure={openSettingsForProduct} />
             )}
+
+            <Dialog open={Boolean(addSizesFor)} onOpenChange={(open) => { if (!open && !isAddingSizes) setAddSizesFor(null); }}>
+              <DialogContent className="bg-[#15151D] border-[#24242F] text-zinc-100 sm:max-w-lg">
+                <DialogHeader>
+                  <DialogTitle className="text-yellow-300">Add sizes</DialogTitle>
+                </DialogHeader>
+                {addSizesFor && (
+                  <div className="space-y-4">
+                    <div className="rounded-lg border border-[#2b2b38] bg-[#111118] p-3 text-sm">
+                      <p className="font-semibold text-white">{addSizesFor.brand !== "N/A" ? `${addSizesFor.brand} ` : ""}{addSizesFor.name}</p>
+                      <p className="mt-0.5 text-xs text-zinc-400">
+                        {addSizesFor.category} &middot; Colour {addSizesFor.color || "Default"} &middot; {addSizesFor.gender && addSizesFor.gender !== "N/A" ? addSizesFor.gender : "No department"} &middot; Cost {formatMoney(addSizesFor.unit_price)}
+                      </p>
+                      <p className="mt-1 text-xs text-zinc-500">New sizes copy these details. You set their stock and selling price in Product Settings.</p>
+                    </div>
+                    <div>
+                      <p className="mb-2 text-xs text-zinc-400">
+                        EU sizes. <span className="text-zinc-500">Greyed out = already in the list.</span>
+                      </p>
+                      <div className="grid grid-cols-5 gap-2 sm:grid-cols-8">
+                        {sizeChoicesFor(addSizesFor.gender).map((size) => {
+                          const exists = existingSizesForShoe.has(size);
+                          const picked = newSizes.includes(size);
+                          return (
+                            <button
+                              key={size}
+                              type="button"
+                              disabled={exists}
+                              aria-pressed={picked}
+                              onClick={() => setNewSizes((prev) => (prev.includes(size) ? prev.filter((x) => x !== size) : [...prev, size].sort((a, b) => Number(a) - Number(b))))}
+                              className={`h-10 rounded-lg border text-sm font-semibold transition ${
+                                exists
+                                  ? "cursor-not-allowed border-[#24242F] bg-[#111118] text-zinc-600 line-through"
+                                  : picked
+                                    ? "border-yellow-400 bg-yellow-400 text-black"
+                                    : "border-[#2b2b38] text-zinc-200 hover:border-yellow-400/60"
+                              }`}
+                            >
+                              {size}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <DialogFooter className="gap-2">
+                  <Button variant="ghost" className="text-zinc-300" disabled={isAddingSizes} onClick={() => setAddSizesFor(null)}>
+                    Cancel
+                  </Button>
+                  <Button className="bg-yellow-400 text-black font-bold hover:bg-yellow-300" disabled={isAddingSizes || newSizes.length === 0} onClick={saveNewSizes}>
+                    {isAddingSizes ? "Adding…" : newSizes.length ? `Add size${newSizes.length === 1 ? "" : "s"} ${newSizes.join(", ")}` : "Pick sizes"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
 
             <TablePagination
               currentPage={safeProductPage}
@@ -1203,7 +1319,7 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
   );
 }
 
-function ProductListTable({ products, onEdit, onConfigure }: { products: UiProduct[]; onEdit: (product: UiProduct) => void; onConfigure?: (product: UiProduct) => void }) {
+function ProductListTable({ products, onEdit, onConfigure, onAddSizes }: { products: UiProduct[]; onEdit: (product: UiProduct) => void; onConfigure?: (product: UiProduct) => void; onAddSizes?: (product: UiProduct) => void }) {
   return (
     <div className="border border-[#24242F] rounded-xl overflow-x-auto bg-[#111118]">
       <Table className="w-full min-w-[1040px]">
@@ -1233,6 +1349,11 @@ function ProductListTable({ products, onEdit, onConfigure }: { products: UiProdu
               <TableCell className="text-center whitespace-nowrap">
                 <div className="flex justify-center gap-2">
                   <Button size="sm" variant="ghost" title="Edit product master" className="text-yellow-400 hover:bg-zinc-800" onClick={() => onEdit(product)}><Edit className="w-4 h-4" /></Button>
+                  {onAddSizes && !product.isArchived && (
+                    <Button size="sm" variant="ghost" title="Add sizes of this shoe" aria-label={`Add sizes of ${product.name}`} className="text-yellow-400 hover:bg-zinc-800" onClick={() => onAddSizes(product)}>
+                      <Layers className="w-4 h-4" />
+                    </Button>
+                  )}
                   {onConfigure && (
                     <Button size="sm" variant="ghost" title={product.hasInventory ? "Product settings & stock" : "Configure initial stock & pricing"} className="text-yellow-400 hover:bg-zinc-800" onClick={() => onConfigure(product)}>
                       <Settings className="w-4 h-4" />
@@ -2236,6 +2357,21 @@ const STANDARD_COLORS = [
   { label: "Multi-Color", value: "Multi-Color", bg: "linear-gradient(135deg, #ef4444, #eab308, #10b981, #3b82f6)" },
   { label: "Default", value: "Default", bg: "#52525b" },
 ];
+
+/** Same shoe = same model, brand, colour and department; sizes differ. */
+function sameShoeKey(product: Pick<UiProduct, "name" | "brand" | "color" | "gender">) {
+  const norm = (value: string) => String(value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  const color = norm(product.color);
+  const gender = norm(product.gender);
+  return [norm(product.name), norm(product.brand), color === "default" ? "" : color, gender === "n/a" ? "" : gender].join("::");
+}
+
+/** EU sizes offered when adding sizes: kids' range for Kids, adult range otherwise. */
+function sizeChoicesFor(department: string) {
+  const isKids = String(department ?? "").trim().toLowerCase() === "kids";
+  const [from, to] = isKids ? [24, 38] : [34, 48];
+  return Array.from({ length: to - from + 1 }, (_, i) => String(from + i));
+}
 
 const STANDARD_SIZES = [
   { value: "35", label: "EU 35 (US Men 3.5 / Women 5)" },
