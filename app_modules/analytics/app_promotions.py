@@ -247,20 +247,6 @@ def _discount_label(kind, discount_value):
     return f"{amount:g}% OFF"
 
 
-def _promo_code(kind, discount_value):
-    try:
-        amount = int(float(discount_value or 0))
-    except (TypeError, ValueError):
-        amount = 0
-    if kind == "bogo":
-        return "BOGO"
-    if kind == "bundle":
-        return "BUNDLE"
-    if kind == "fixed":
-        return f"SAVE{amount}" if amount else "SAVE"
-    return f"STEP{amount}" if amount else "STEP"
-
-
 def _product_price(product):
     for key in ("srp", "selling_price", "selling_price_php", "price", "unit_price", "base_price", "cost_price"):
         if product.get(key) not in (None, ""):
@@ -446,7 +432,6 @@ def _build_promotion_email(
     kind = _campaign_kind(discount_type, promo_name)
     clean_name = _clean_promo_name(promo_name)
     discount = _discount_label(kind, discount_value)
-    code = _promo_code(kind, discount_value)
 
     templates = {
         "percentage": {
@@ -511,104 +496,252 @@ def _build_promotion_email(
     # Only recommend what a customer can actually buy today.
     today = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")  # Asia/Manila (no DST)
     top_picks = _top_picks([product for product in matching_products if _is_sellable(product, today)])
-    safe_target_label = escape(_target_label(target_products, matching_products, linked_product_ids=linked_product_ids))
 
-    if not top_picks:
-        top_picks_html = (
-            "<div style='border:1px solid #2b2d38;border-radius:16px;padding:16px;background:#15161d'>"
-            "Visit Meryl Shoes to see the styles included in this campaign."
-            "</div>"
-        )
-    else:
-        pick_cards = []
-        for index, product in enumerate(top_picks, start=1):
-            product_name = escape(str(product.get("product_name") or product.get("name") or f"Product {index}"))
-            brand = escape(str(product.get("brand") or "Meryl Shoes"))
-            color = str(product.get("color") or "").strip()
-            sizes = product.get("sizes_in_stock") or []
-            variant = " · ".join(
-                part
-                for part in (
-                    color if color.lower() not in ("", "default", "n/a") else "",
-                    ("Sizes in stock: " if len(sizes) > 1 else "Size in stock: ") + ", ".join(sizes) if sizes else "",
-                )
-                if part
-            )
-            variant_text = f"<div style='color:#9ca3af;font-size:12px'>{escape(variant)}</div>" if variant else ""
-            price = escape(_product_price(product))
-            reason = escape(_top_pick_reason(product, kind))
-            pick_cards.append(
-                "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' "
-                "style='border:1px solid #2b2d38;border-radius:16px;background:#15161d;"
-                "margin:0 0 12px;border-collapse:separate;overflow:hidden'>"
-                "<tr>"
-                "<td valign='top' style='padding:18px'>"
-                f"<div style='color:#ffcc00;font-size:11px;font-weight:800;text-transform:uppercase;"
-                f"letter-spacing:.5px;margin-bottom:3px'>{brand}</div>"
-                f"<div style='font-size:20px;font-weight:900;line-height:1.2;margin-bottom:4px;color:#ffffff'>{product_name}</div>"
-                f"{variant_text}"
-                f"<div style='font-weight:900;margin:10px 0;color:#ffffff'>{price}</div>"
-                f"<div style='color:#d1d5db;font-size:13px;line-height:1.5'>Why you will love it: {reason}</div>"
-                "</td>"
-                "</tr>"
-                "</table>"
-            )
-        top_picks_html = "".join(pick_cards)
-
-    safe_customer = escape(str(customer_name or "there").strip() or "there")
-    safe_campaign = escape(clean_name)
-    safe_discount = escape(discount)
-    safe_start = escape(start_date or "Today")
-    safe_end = escape(end_date or "Limited time")
-    safe_preview = escape(template["preview"])
-    # White band with the store logo (the brand logo is designed for a white background).
-    logo_band = (
-        "<div style='background:#ffffff;padding:18px 24px;text-align:center'>"
-        f"<img src='cid:{LOGO_CID}' width='200' alt='Meryl Shoes' "
-        "style='display:block;margin:0 auto;width:200px;max-width:60%;height:auto;border:0'>"
-        "</div>"
-        if _LOGO_BYTES
-        else ""
-    )
-
-    html = (
-        "<div style='display:none;max-height:0;overflow:hidden;opacity:0;color:transparent'>"
-        f"{safe_preview}"
-        "</div>"
-        "<div style='font-family:Arial,sans-serif;background:#0b0c10;color:#ffffff;padding:28px'>"
-        "<div style='max-width:640px;margin:auto;background:#15161d;border:1px solid #2b2d38;"
-        "border-radius:22px;overflow:hidden'>"
-        f"{logo_band}"
-        "<div style='background:linear-gradient(135deg,#e51b2a,#8b111b);padding:28px'>"
-        f"<h1 style='font-size:32px;line-height:1.15;margin:14px 0 10px'>{escape(template['headline'])}</h1>"
-        f"<p style='margin:0;color:#f3f4f6;line-height:1.55'>{escape(template['body'])}</p>"
-        "</div>"
-        "<div style='padding:26px'>"
-        f"<p style='font-size:16px;line-height:1.55;margin-top:0'>Hi {safe_customer},</p>"
-        f"<p style='font-size:16px;line-height:1.55'>Campaign: <strong>{safe_campaign}</strong></p>"
-        "<div style='background:#171923;color:#f3f4f6;border:1px solid #2b2d38;border-radius:16px;padding:16px;margin:20px 0;'>"
-        "<div style='font-size:14px;font-weight:700;color:#ffcc00;margin-bottom:6px'>Offer Details</div>"
-        f"<div style='font-size:16px;line-height:1.5'>This campaign includes: <strong>{safe_discount}</strong></div>"
-        f"<div style='font-size:14px;line-height:1.5;color:#d1d5db;margin-top:8px'>Target: <strong>{safe_target_label}</strong></div>"
-        "</div>"
-        "<div style='display:flex;gap:12px;margin:18px 0;flex-wrap:wrap'>"
-        f"<span style='border:1px solid #2b2d38;border-radius:999px;padding:8px 12px;color:#d1d5db'>Starts: {safe_start}</span>"
-        f"<span style='border:1px solid #2b2d38;border-radius:999px;padding:8px 12px;color:#d1d5db'>Ends: {safe_end}</span>"
-        "</div>"
-        f"<a style='display:inline-block;background:#ffcc00;color:#111217;text-decoration:none;"
-        f"font-weight:800;border-radius:14px;padding:14px 18px;margin:4px 0 24px'>{escape(template['cta'])}</a>"
-        "<h2 style='font-size:20px;margin:0 0 14px;color:#ffffff'>Top Picks For You</h2>"
-        f"{top_picks_html}"
-        "<p style='color:#9ca3af;font-size:13px;line-height:1.5;margin-top:20px'>"
-        "This promotional message was sent by Meryl Shoes. Visit the store to confirm availability, "
-        "included products, and final checkout pricing."
-        "</p>"
-        "<p style='color:#ffcc00;font-weight:800;margin-bottom:0'>Meryl Shoes</p>"
-        "</div></div></div>"
+    html = _render_promotion_email(
+        kind=kind,
+        template=template,
+        campaign=clean_name,
+        discount=discount,
+        discount_value=discount_value,
+        customer_name=customer_name,
+        start_date=start_date,
+        end_date=end_date,
+        target_label=_target_label(target_products, matching_products, linked_product_ids=linked_product_ids),
+        top_picks=top_picks,
     )
 
     return {"subject": template["subject"], "html": html}
 
+
+
+# ------------------------------------------------------------------------------
+# Promotion email layout
+# ------------------------------------------------------------------------------
+STORE_EMAIL_INFO = {
+    "name": "Meryl Shoes",
+    "tagline": "Official Retailer & Shoe Center",
+    "address": "Araneta Ave, Bacolod, 6100 Negros Occidental",
+    "phone": "(034) 435 0128",
+    "hours": "Open daily, 7:30 AM - 7:30 PM",
+    "maps_url": "https://www.google.com/maps/search/?api=1&query=Meryl+Shoes+Araneta+Ave+Bacolod",
+}
+_EMAIL_RED = "#D71920"
+_EMAIL_RED_DARK = "#A30F15"
+_EMAIL_YELLOW = "#FFD60A"
+_EMAIL_INK = "#1B1B1F"
+_EMAIL_MUTED = "#6B6B73"
+_EMAIL_LINE = "#E7E5E0"
+_EMAIL_BG = "#F2F1EE"
+_EMAIL_FONT = "Arial,Helvetica,sans-serif"
+
+
+def _email_date(value, *, with_year=False):
+    try:
+        parsed = datetime.strptime(str(value or "")[:10], "%Y-%m-%d")
+    except ValueError:
+        return ""
+    return parsed.strftime("%b %d, %Y" if with_year else "%b %d").replace(" 0", " ")
+
+
+def _email_amount(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _sale_price(kind, price, discount_value):
+    """Price after the offer for percent / peso-off promotions (None otherwise)."""
+    amount = _email_amount(discount_value) or 0
+    if price is None or price <= 0:
+        return None
+    if kind == "percentage" and 0 < amount < 100:
+        return round(price * (1 - amount / 100), 2)
+    if kind == "fixed" and 0 < amount < price:
+        return round(price - amount, 2)
+    return None
+
+
+def _pick_card(product, kind, discount_value):
+    name = escape(str(product.get("product_name") or product.get("name") or "Featured pair"))
+    brand = escape(str(product.get("brand") or "Meryl Shoes").upper())
+    color = str(product.get("color") or "").strip()
+    sizes = product.get("sizes_in_stock") or []
+    details = []
+    if color and color.lower() not in ("default", "n/a"):
+        details.append(escape(color))
+    if sizes:
+        details.append(("Sizes " if len(sizes) > 1 else "Size ") + escape(", ".join(sizes)))
+    detail_line = " &middot; ".join(details)
+
+    price = None
+    for key in ("srp", "selling_price", "price", "unit_price"):
+        price = _email_amount(product.get(key))
+        if price:
+            break
+    sale = _sale_price(kind, price, discount_value)
+    if sale is not None:
+        price_html = (
+            f"<span style='font-size:20px;font-weight:bold;color:{_EMAIL_RED}'>{escape(_money(sale))}</span>"
+            f"&nbsp;&nbsp;<span style='font-size:13px;color:{_EMAIL_MUTED};text-decoration:line-through'>{escape(_money(price))}</span>"
+        )
+    elif price:
+        price_html = f"<span style='font-size:20px;font-weight:bold;color:{_EMAIL_INK}'>{escape(_money(price))}</span>"
+    else:
+        price_html = f"<span style='font-size:14px;color:{_EMAIL_MUTED}'>Ask in store for the price</span>"
+    if kind == "bogo":
+        price_html += f"<div style='font-size:12px;color:{_EMAIL_RED};font-weight:bold;padding-top:4px'>Buy 1, get the 2nd pair free</div>"
+    elif kind == "bundle":
+        price_html += f"<div style='font-size:12px;color:{_EMAIL_RED};font-weight:bold;padding-top:4px'>Extra savings when bundled</div>"
+
+    image_url = str(product.get("image_url") or "").strip()
+    if image_url.startswith("https://"):
+        image_cell = (
+            f"<img src='{escape(image_url)}' width='112' height='112' alt='{name}' "
+            f"style='display:block;width:112px;height:112px;object-fit:cover;border-radius:10px;border:0;background:{_EMAIL_BG}'>"
+        )
+    else:
+        initial = escape((str(product.get("product_name") or "M").strip()[:1] or "M").upper())
+        image_cell = (
+            f"<table role='presentation' width='112' cellpadding='0' cellspacing='0' style='border-collapse:collapse'>"
+            f"<tr><td width='112' height='112' align='center' valign='middle' "
+            f"style='width:112px;height:112px;background:{_EMAIL_BG};border-radius:10px;font:bold 40px {_EMAIL_FONT};color:{_EMAIL_RED}'>{initial}</td></tr></table>"
+        )
+
+    return (
+        f"<table role='presentation' width='100%' cellpadding='0' cellspacing='0' "
+        f"style='border-collapse:separate;border:1px solid {_EMAIL_LINE};border-radius:14px;margin:0 0 14px'>"
+        "<tr>"
+        f"<td width='112' valign='top' style='padding:14px 0 14px 14px'>{image_cell}</td>"
+        f"<td valign='middle' style='padding:14px 16px;font-family:{_EMAIL_FONT}'>"
+        f"<div style='font-size:11px;font-weight:bold;letter-spacing:1px;color:{_EMAIL_MUTED}'>{brand}</div>"
+        f"<div style='font-size:18px;font-weight:bold;color:{_EMAIL_INK};padding:2px 0 4px'>{name}</div>"
+        + (f"<div style='font-size:13px;color:{_EMAIL_MUTED};padding-bottom:8px'>{detail_line}</div>" if detail_line else "")
+        + f"<div>{price_html}</div>"
+        "</td>"
+        "</tr>"
+        "</table>"
+    )
+
+
+def _render_promotion_email(*, kind, template, campaign, discount, discount_value, customer_name,
+                            start_date, end_date, target_label, top_picks):
+    store = STORE_EMAIL_INFO
+    first_name = (str(customer_name or "").strip().split() or [""])[0]
+    greeting = f"Hi {escape(first_name.title())}," if first_name else "Hi there,"
+    starts = _email_date(start_date)
+    ends = _email_date(end_date, with_year=True)
+    window = f"{starts} &ndash; {ends}" if starts and ends else (f"Until {ends}" if ends else "For a limited time")
+
+    big_offer = {
+        "bogo": "BUY 1 GET 1",
+        "bundle": "BUNDLE &amp; SAVE",
+    }.get(kind, escape(discount))
+    offer_sub = {
+        "percentage": "on selected regular-priced footwear",
+        "fixed": "on your next pair of selected styles",
+        "bogo": "on selected styles while stocks last",
+        "bundle": "when you pair selected styles together",
+    }.get(kind, "on selected footwear")
+    covers = escape(target_label) if target_label and target_label != "All Products" else "All regular-priced footwear"
+
+    logo = (
+        f"<img src='cid:{LOGO_CID}' width='170' alt='Meryl Shoes' "
+        "style='display:block;margin:0 auto;width:170px;height:auto;border:0'>"
+        if _LOGO_BYTES
+        else f"<div style='font:bold 26px {_EMAIL_FONT};color:{_EMAIL_RED}'>MERYL SHOES</div>"
+    )
+
+    picks_html = "".join(_pick_card(product, kind, discount_value) for product in top_picks)
+    picks_section = (
+        f"<tr><td style='padding:8px 32px 6px;font-family:{_EMAIL_FONT}'>"
+        f"<div style='font-size:12px;font-weight:bold;letter-spacing:2px;color:{_EMAIL_RED}'>PICKED FOR YOU</div>"
+        f"<div style='font-size:22px;font-weight:bold;color:{_EMAIL_INK};padding:4px 0 14px'>In stock and on sale now</div>"
+        f"{picks_html}"
+        "</td></tr>"
+        if picks_html
+        else ""
+    )
+
+    steps = [
+        ("1", "Visit Meryl Shoes", "Araneta Ave, Bacolod"),
+        ("2", "Pick your pair", covers),
+        ("3", "Pay at the counter", "The discount is applied automatically"),
+    ]
+    steps_html = "".join(
+        f"<td width='33%' valign='top' style='padding:0 6px;font-family:{_EMAIL_FONT};text-align:center'>"
+        f"<div style='width:30px;height:30px;line-height:30px;margin:0 auto 8px;border-radius:15px;"
+        f"background:{_EMAIL_YELLOW};color:{_EMAIL_INK};font-weight:bold;font-size:14px'>{num}</div>"
+        f"<div style='font-size:14px;font-weight:bold;color:{_EMAIL_INK}'>{title}</div>"
+        f"<div style='font-size:12px;color:{_EMAIL_MUTED};line-height:1.45;padding-top:3px'>{text}</div>"
+        "</td>"
+        for num, title, text in steps
+    )
+
+    return (
+        # Inbox preview text (hidden in the body).
+        f"<div style='display:none;max-height:0;overflow:hidden;opacity:0;color:transparent'>{escape(template['preview'])}</div>"
+        f"<table role='presentation' width='100%' cellpadding='0' cellspacing='0' style='background:{_EMAIL_BG};border-collapse:collapse'>"
+        "<tr><td align='center' style='padding:24px 12px'>"
+        "<table role='presentation' width='600' cellpadding='0' cellspacing='0' "
+        "style='width:100%;max-width:600px;background:#ffffff;border-collapse:separate;border-radius:16px;overflow:hidden'>"
+
+        # Logo
+        f"<tr><td align='center' style='padding:22px 24px 16px;background:#ffffff'>{logo}</td></tr>"
+
+        # Hero
+        f"<tr><td align='center' bgcolor='{_EMAIL_RED}' style='background:{_EMAIL_RED};"
+        f"background-image:linear-gradient(135deg,{_EMAIL_RED},{_EMAIL_RED_DARK});padding:34px 28px 30px;font-family:{_EMAIL_FONT}'>"
+        f"<div style='font-size:12px;font-weight:bold;letter-spacing:3px;color:{_EMAIL_YELLOW}'>{escape(campaign.upper())}</div>"
+        f"<div style='font-size:56px;line-height:1.05;font-weight:bold;color:#ffffff;padding:10px 0 6px'>{big_offer}</div>"
+        f"<div style='font-size:16px;color:#ffe9e9;padding-bottom:18px'>{offer_sub}</div>"
+        f"<span style='display:inline-block;background:{_EMAIL_YELLOW};color:{_EMAIL_INK};font-size:13px;"
+        f"font-weight:bold;border-radius:999px;padding:8px 16px'>{window}</span>"
+        "</td></tr>"
+
+        # Message
+        f"<tr><td style='padding:28px 32px 8px;font-family:{_EMAIL_FONT};color:{_EMAIL_INK}'>"
+        f"<div style='font-size:16px;padding-bottom:10px'>{greeting}</div>"
+        f"<div style='font-size:22px;font-weight:bold;line-height:1.25;padding-bottom:10px'>{escape(template['headline'])}</div>"
+        f"<div style='font-size:15px;line-height:1.6;color:#3A3A40'>{escape(template['body'])}</div>"
+        "</td></tr>"
+
+        # Call to action
+        f"<tr><td align='center' style='padding:22px 32px 26px'>"
+        f"<a href='{store['maps_url']}' style='display:inline-block;background:{_EMAIL_INK};color:#ffffff;"
+        f"font:bold 15px {_EMAIL_FONT};text-decoration:none;border-radius:10px;padding:15px 28px'>Get directions to the store</a>"
+        f"<div style='font:13px {_EMAIL_FONT};color:{_EMAIL_MUTED};padding-top:10px'>No code needed. Show this email or just shop in store.</div>"
+        "</td></tr>"
+
+        # Top picks
+        f"{picks_section}"
+
+        # How to redeem
+        f"<tr><td style='padding:14px 26px 26px'>"
+        f"<table role='presentation' width='100%' cellpadding='0' cellspacing='0' "
+        f"style='background:#FFF8D6;border-radius:14px;border-collapse:separate'>"
+        f"<tr><td colspan='3' align='center' style='padding:18px 12px 12px;font:bold 12px {_EMAIL_FONT};letter-spacing:2px;color:{_EMAIL_INK}'>HOW TO REDEEM</td></tr>"
+        f"<tr>{steps_html}</tr>"
+        "<tr><td colspan='3' style='height:18px;line-height:18px'>&nbsp;</td></tr>"
+        "</table>"
+        "</td></tr>"
+
+        # Footer
+        f"<tr><td align='center' style='background:{_EMAIL_INK};padding:26px 28px;font-family:{_EMAIL_FONT};color:#C9C9CF'>"
+        f"<div style='font-size:15px;font-weight:bold;color:#ffffff'>{store['name']}</div>"
+        f"<div style='font-size:12px;color:{_EMAIL_YELLOW};padding:2px 0 10px'>{store['tagline']}</div>"
+        f"<div style='font-size:13px;line-height:1.6'>{store['address']}<br>Tel. {store['phone']} &middot; {store['hours']}</div>"
+        "<div style='font-size:11px;line-height:1.6;color:#8E8E96;padding-top:14px'>"
+        f"Offer valid {window} on selected in-stock items while supplies last. "
+        "One promotion per item. Replacements follow our 7-day, one-exchange policy; no cash refunds.<br>"
+        "You are receiving this because you are a Meryl Shoes customer. "
+        "Reply &quot;unsubscribe&quot; to stop promotional emails."
+        "</div>"
+        "</td></tr>"
+
+        "</table>"
+        "</td></tr></table>"
+    )
 
 def send_promotion_notifications_via_gmail(
     promo_id,
