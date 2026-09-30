@@ -5,6 +5,7 @@ import base64
 from email.message import EmailMessage
 from html import escape
 import json
+import os
 import urllib.parse
 import urllib.request
 import urllib.error
@@ -135,6 +136,18 @@ def _gmail_access_token(*, client_id, client_secret, refresh_token):
     return token
 
 
+# Store logo shown at the top of promotion emails. It is attached inside the
+# email (Content-ID) rather than linked, so it shows without "load images" and
+# does not depend on the website being reachable.
+LOGO_CID = "meryl-logo"
+_LOGO_PATH = os.path.join(os.path.dirname(__file__), "assets", "meryl_logo_email.jpg")
+try:
+    with open(_LOGO_PATH, "rb") as _logo_file:
+        _LOGO_BYTES = _logo_file.read()
+except OSError:
+    _LOGO_BYTES = b""
+
+
 def _gmail_send_message(*, access_token, sender_email, sender_name, recipient_email, subject, html_content):
     message = EmailMessage()
     message["To"] = recipient_email
@@ -144,6 +157,9 @@ def _gmail_send_message(*, access_token, sender_email, sender_name, recipient_em
         "This email contains a Meryl Shoes promotion. Please view it in an HTML-capable email app."
     )
     message.add_alternative(html_content, subtype="html")
+    if _LOGO_BYTES and f"cid:{LOGO_CID}" in html_content:
+        html_part = message.get_payload()[1]
+        html_part.add_related(_LOGO_BYTES, maintype="image", subtype="jpeg", cid=f"<{LOGO_CID}>", filename="meryl-shoes-logo.jpg")
 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
     payload = json.dumps({"raw": raw}).encode("utf-8")
@@ -545,6 +561,15 @@ def _build_promotion_email(
     safe_start = escape(start_date or "Today")
     safe_end = escape(end_date or "Limited time")
     safe_preview = escape(template["preview"])
+    # White band with the store logo (the brand logo is designed for a white background).
+    logo_band = (
+        "<div style='background:#ffffff;padding:18px 24px;text-align:center'>"
+        f"<img src='cid:{LOGO_CID}' width='200' alt='Meryl Shoes' "
+        "style='display:block;margin:0 auto;width:200px;max-width:60%;height:auto;border:0'>"
+        "</div>"
+        if _LOGO_BYTES
+        else ""
+    )
 
     html = (
         "<div style='display:none;max-height:0;overflow:hidden;opacity:0;color:transparent'>"
@@ -553,6 +578,7 @@ def _build_promotion_email(
         "<div style='font-family:Arial,sans-serif;background:#0b0c10;color:#ffffff;padding:28px'>"
         "<div style='max-width:640px;margin:auto;background:#15161d;border:1px solid #2b2d38;"
         "border-radius:22px;overflow:hidden'>"
+        f"{logo_band}"
         "<div style='background:linear-gradient(135deg,#e51b2a,#8b111b);padding:28px'>"
         f"<h1 style='font-size:32px;line-height:1.15;margin:14px 0 10px'>{escape(template['headline'])}</h1>"
         f"<p style='margin:0;color:#f3f4f6;line-height:1.55'>{escape(template['body'])}</p>"
