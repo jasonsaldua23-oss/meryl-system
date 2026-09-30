@@ -11,7 +11,7 @@
 --   Running Shoes    performance / road running models
 --   Basketball Shoes signature basketball models (LeBron, Kobe, Jordan)
 --   Casual Shoes     lifestyle sneakers, canvas, walking and slip-ons
---   Formal Shoes     school shoes, dress flats, boat shoes (Topsider, Alex)
+--   Formal Shoes     school shoes, dress flats, boat shoes; all Alex products (Topsider, Alex)
 --   Sandals          sandals, slides and slippers (Sandugo, Manjaru)
 --
 -- The last query lists the result so it can be checked.
@@ -40,12 +40,25 @@ from (values ('adidas', 'Adidas'), ('nike', 'Nike'), ('puma', 'Puma'), ('alex', 
 where lower(p.product_name) like b.prefix || ' %'
   and (p.brand is null or trim(p.brand) = '' or lower(p.brand) in ('n/a', 'na', 'none', 'default'));
 
+-- One model, one name: "Airforce 1" and "Nike Air Force 1" are the Nike Air
+-- Force 1, so analytics, forecasts and promotions count them as one model.
+-- Variants keep their own size, colour, stock and sales history.
+update public.product
+set product_name = 'Air Force 1', brand = 'Nike', updated_at = now()
+where lower(regexp_replace(product_name, '\s+', '', 'g')) in ('airforce1', 'nikeairforce1')
+  and product_name <> 'Air Force 1';
+update public.promotion
+set target_products = regexp_replace(target_products, '(Nike Air Force 1|Airforce 1)', 'Air Force 1', 'gi')
+where target_products ~* '(Nike Air Force 1|Airforce 1)';
+
 -- 3. Category by model (first match wins) -------------------------------------
 with rules as (
   select p.product_id,
     case
       -- Signature basketball models
       when lower(p.product_name) ~ '(lebron|kobe|jordan)' then 'Basketball Shoes'
+      -- Alex is the store's school / formal shoe brand
+      when lower(coalesce(p.brand, '')) = 'alex' then 'Formal Shoes'
       -- Sandals / slides / slippers, and the sandal brands
       when lower(p.product_name) ~ '(sandal|slide|slipper|flip ?flop)' or lower(coalesce(p.brand, '')) in ('sandugo', 'manjaru') then 'Sandals'
       -- School shoes, dress flats, boat shoes, oxfords, loafers
