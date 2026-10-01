@@ -24,6 +24,8 @@ import { productAnalyticsSnapshotsApi } from "../../lib/api";
 import { localDateKey } from "../../lib/datetime";
 import { getSizeCurveAvailability, matchesSizeCurveScope, sizeCurveStyleKey, type SizeCurveScope } from "../../lib/size-curve";
 import { normalizeProductDepartment } from "../../lib/product-department";
+import { calculatePromotionPerformance } from "../../lib/promotion-performance";
+import { TablePagination } from "./ui/table-pagination";
 
 type RevenueTrendPeriod = "daily" | "weekly" | "monthly" | "quarterly" | "annually";
 type ProductAnalyticsPeriod = RevenueTrendPeriod | "custom";
@@ -98,24 +100,6 @@ function toDate(value: unknown) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function endOfDay(date: Date | null) {
-  if (!date) return null;
-  const copy = new Date(date);
-  copy.setHours(23, 59, 59, 999);
-  return copy;
-}
-
-function businessDateKey(date: Date) {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Manila",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
-  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
-  return `${get("year")}-${get("month")}-${get("day")}`;
-}
-
 function getOne(value: any) {
   return Array.isArray(value) ? value[0] : value;
 }
@@ -185,37 +169,6 @@ function getSaleDetailRevenue(detail: any) {
   const qty = Number(detail?.quantity ?? 0);
   const price = Number(detail?.price ?? 0);
   return Number(detail?.subtotal ?? (price * qty));
-}
-
-function parsePromotionTargets(text: unknown) {
-  const raw = String(text ?? "").trim();
-  if (!raw || raw.toLowerCase() === "all products") {
-    return { categories: [] as string[], products: [] as string[] };
-  }
-  const categories: string[] = [];
-  const products: string[] = [];
-  raw.split("|").forEach((segment) => {
-    const value = segment.trim();
-    if (!value) return;
-    const lower = value.toLowerCase();
-    if (lower.startsWith("categories:")) {
-      value.slice("categories:".length).split(",").map((item) => item.trim()).filter(Boolean).forEach((item) => categories.push(item.toLowerCase()));
-      return;
-    }
-    if (lower.startsWith("products:")) {
-      value.slice("products:".length).split(",").map((item) => item.trim()).filter(Boolean).forEach((item) => products.push(item.toLowerCase()));
-      return;
-    }
-    if (lower.endsWith(" category")) {
-      categories.push(value.slice(0, -" category".length).trim().toLowerCase());
-      return;
-    }
-    products.push(lower);
-  });
-  return {
-    categories: Array.from(new Set(categories)),
-    products: Array.from(new Set(products)),
-  };
 }
 
 function getCustomerGender(customer: any, fallbackProductGender?: string) {
@@ -344,6 +297,13 @@ export function PredictiveAnalytics() {
   const [productPageSize, setProductPageSize] = useState<number>(10);
   const [productCurrentPage, setProductCurrentPage] = useState<number>(1);
   const [sizeCurveScope, setSizeCurveScope] = useState<SizeCurveScope>("current");
+  const [promotionSearchTerm, setPromotionSearchTerm] = useState("");
+  const [promotionStatusFilter, setPromotionStatusFilter] = useState("all");
+  const [promotionTypeFilter, setPromotionTypeFilter] = useState("all");
+  const [promotionStartDate, setPromotionStartDate] = useState("");
+  const [promotionEndDate, setPromotionEndDate] = useState("");
+  const [promotionPageSize, setPromotionPageSize] = useState(10);
+  const [promotionCurrentPage, setPromotionCurrentPage] = useState(1);
   const salesQuery = useSales();
   const productsQuery = useProducts();
   const customersQuery = useCustomers();
@@ -355,6 +315,10 @@ export function PredictiveAnalytics() {
   const customers = (customersQuery.data as any[]) ?? [];
   const promotions = (promotionsQuery.data as any[]) ?? [];
   const returnsData = (returnsQuery.data as any[]) ?? [];
+
+  useEffect(() => {
+    setPromotionCurrentPage(1);
+  }, [promotionSearchTerm, promotionStatusFilter, promotionTypeFilter, promotionStartDate, promotionEndDate]);
 
   const { defectiveReplacementsByProduct, totalReplacementsCount, totalDefectiveLoss, totalAvailableStock, totalReservedStock } = useMemo(() => {
     const map = new Map<string, { count: number; lossAmount: number }>();
@@ -1085,87 +1049,12 @@ export function PredictiveAnalytics() {
       })),
     ].slice(0, 5);
 
-    const totalUnitsAllTime = Math.max(
-      sales.reduce((sum: number, sale: any) => {
-        const details = Array.isArray(sale.sales_details) ? sale.sales_details : [];
-        return sum + details.reduce((detailSum: number, detail: any) => detailSum + Number(detail.quantity ?? 0), 0);
-      }, 0),
-      1,
-    );
-    const today = localDateKey(new Date());
-
-    const promotionPerformance = promotions
-      .map((promo: any, index: number) => {
-        const promoProducts = Array.isArray(promo.promo_product) ? promo.promo_product : [];
-        const productIds = new Set(promoProducts.map((row: any) => String(row.product_id ?? row.product?.product_id ?? "")));
-        const parsedTargets = parsePromotionTargets(promo.target_products ?? promo.targetProducts);
-        const hasSpecificTargets = productIds.size > 0 || parsedTargets.products.length > 0 || parsedTargets.categories.length > 0;
-        const promoId = String(promo.promo_id ?? `promo-${index}`);
-        const start = toDate(promo.start_date);
-        const end = endOfDay(toDate(promo.end_date));
-        const startDate = String(promo.start_date ?? "").slice(0, 10);
-        const endDate = String(promo.end_date ?? "").slice(0, 10);
-        const rawStatus = String(promo.status ?? promo.promo_status ?? "").toLowerCase();
-
-        const derivedStatus =
-          rawStatus.includes("expired") || (endDate && endDate < today)
-            ? "Ended"
-            : rawStatus.includes("active") || (startDate && startDate <= today && endDate && endDate >= today)
-              ? "Active"
-              : "Scheduled";
-
-        let revenue = 0;
-        let units = 0;
-        sales.forEach((sale: any) => {
-          const date = toDate(sale.transaction_date ?? sale.created_at);
-          if (!date) return;
-          const saleDateKey = businessDateKey(date);
-          if (startDate && saleDateKey < startDate) return;
-          if (endDate && saleDateKey > endDate) return;
-          const details = Array.isArray(sale.sales_details) ? sale.sales_details : [];
-          details.forEach((detail: any) => {
-            const productId = String(detail.product_id ?? "");
-            const product = productMap.get(productId) ?? detail.product;
-            const productName = String(product?.product_name ?? "").trim().toLowerCase();
-            const categoryName = getCategory(product).trim().toLowerCase();
-            const detailPromoId = String(detail.promo_id ?? detail.promotion_id ?? "");
-            const matchesExactPromo = detailPromoId && detailPromoId === promoId;
-            const matchesLinkedProduct = productIds.has(productId);
-            const matchesNamedProduct = parsedTargets.products.includes(productName);
-            const matchesCategory = parsedTargets.categories.includes(categoryName);
-            const matchesPromoTarget = !hasSpecificTargets || matchesLinkedProduct || matchesNamedProduct || matchesCategory;
-            if (!matchesExactPromo && !matchesPromoTarget) return;
-            units += Number(detail.quantity ?? 0);
-            revenue += getSaleDetailRevenue(detail);
-          });
-        });
-
-        return {
-          id: promoId,
-          name: String(promo.promo_name ?? "Promotion"),
-          status: derivedStatus,
-          start: start ? formatShortDate(start) : "N/A",
-          end: end ? formatShortDate(end) : "N/A",
-          revenue,
-          units,
-          contribution: Number(((units / totalUnitsAllTime) * 100).toFixed(1)),
-        };
-      })
-      .sort((a, b) => b.revenue - a.revenue);
-
-    const activePromotionCount = promotionPerformance.filter((promo) => promo.status.toLowerCase() === "active").length;
-    const activePromotionChart = promotionPerformance
-      .filter((promo) => promo.status.toLowerCase() === "active")
-      .slice(0, 8)
+    const promotionPerformance = calculatePromotionPerformance(promotions, sales, productMap)
       .map((promo) => ({
-        name: shortLabel(promo.name),
-        fullName: promo.name,
-        revenue: Math.round(promo.revenue),
-        units: promo.units,
-        contribution: promo.contribution,
+        ...promo,
+        start: Number.isFinite(promo.startMs) ? formatShortDate(new Date(promo.startMs)) : "N/A",
+        end: Number.isFinite(promo.endMs) ? formatShortDate(new Date(promo.endMs)) : "N/A",
       }));
-    const promoRevenue = promotionPerformance.reduce((sum, promo) => sum + promo.revenue, 0);
-    const promoUnits = promotionPerformance.reduce((sum, promo) => sum + promo.units, 0);
 
     return {
       productMovement,
@@ -1203,10 +1092,6 @@ export function PredictiveAnalytics() {
       productPeriodLabel,
       topRankingPeriodLabel,
       promotionPerformance,
-      activePromotionCount,
-      activePromotionChart,
-      promoRevenue,
-      promoUnits,
     };
   }, [customerAnalyticsPeriod, customers, customEndDate, customStartDate, effectiveProductAnalyticsPeriod, productAnalyticsPeriod, products, promotions, revenueTrendPeriod, sales, salesForecastPeriod, topRankingMetric, topRankingPeriod]);
 
@@ -1329,7 +1214,39 @@ export function PredictiveAnalytics() {
   const showCustomer = analyticsView === "customer";
   const showSales = analyticsView === "sales";
   const showPromotion = analyticsView === "promotion";
-  const hasActivePromotionPerformance = analytics.activePromotionChart.some((promo) => promo.revenue > 0 || promo.units > 0);
+  const promotionFilterStartMs = promotionStartDate ? new Date(`${promotionStartDate}T00:00:00`).getTime() : Number.NEGATIVE_INFINITY;
+  const promotionFilterEndMs = promotionEndDate ? new Date(`${promotionEndDate}T23:59:59.999`).getTime() : Number.POSITIVE_INFINITY;
+  const promotionQuery = promotionSearchTerm.trim().toLowerCase();
+  const filteredPromotionRows = analytics.promotionPerformance.filter((promo) => {
+    if (promotionQuery && !String(promo.name).toLowerCase().includes(promotionQuery)) return false;
+    if (promotionStatusFilter !== "all" && String(promo.status).toLowerCase() !== promotionStatusFilter) return false;
+    if (promotionTypeFilter !== "all" && promo.type !== promotionTypeFilter) return false;
+    if (promo.endMs < promotionFilterStartMs || promo.startMs > promotionFilterEndMs) return false;
+    return true;
+  });
+  const filteredPromotionRevenue = filteredPromotionRows.reduce((sum, promo) => sum + Number(promo.revenue ?? 0), 0);
+  const filteredPromotionUnits = filteredPromotionRows.reduce((sum, promo) => sum + Number(promo.units ?? 0), 0);
+  const filteredPromotionPerformance = filteredPromotionRows.map((promo) => ({
+    ...promo,
+    contribution: filteredPromotionRevenue > 0
+      ? Number(((Number(promo.revenue ?? 0) / filteredPromotionRevenue) * 100).toFixed(1))
+      : 0,
+  }));
+  const filteredActivePromotionCount = filteredPromotionPerformance.filter((promo) => promo.status === "Active").length;
+  const filteredPromotionChart = filteredPromotionPerformance.slice(0, 8).map((promo) => ({
+    name: shortLabel(promo.name),
+    fullName: promo.name,
+    revenue: Math.round(promo.revenue),
+    units: promo.units,
+    contribution: promo.contribution,
+  }));
+  const hasFilteredPromotionPerformance = filteredPromotionChart.some((promo) => promo.revenue > 0 || promo.units > 0);
+  const totalPromotionPages = Math.max(1, Math.ceil(filteredPromotionPerformance.length / promotionPageSize));
+  const safePromotionPage = Math.min(Math.max(1, promotionCurrentPage), totalPromotionPages);
+  const paginatedPromotionPerformance = filteredPromotionPerformance.slice(
+    (safePromotionPage - 1) * promotionPageSize,
+    safePromotionPage * promotionPageSize,
+  );
   const categoryUnitsTotal = analytics.categoryChart.reduce((sum, row) => sum + Number(row.units ?? 0), 0);
   const availableCategories = useMemo(() => {
     const set = new Set<string>();
@@ -1733,20 +1650,20 @@ export function PredictiveAnalytics() {
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           <MetricCard
             title="Active Promotions"
-            value={String(analytics.activePromotionCount)}
-            note="Campaigns currently running"
+            value={String(filteredActivePromotionCount)}
+            note="Running campaigns in this view"
             icon={Sparkles}
           />
           <MetricCard
-            title="Promotion Revenue"
-            value={shortMoney(analytics.promoRevenue)}
-            note="Sales value linked to promotion windows"
+            title="Attributed Revenue"
+            value={shortMoney(filteredPromotionRevenue)}
+            note="Completed sales with an applied promotion"
             icon={TrendingUp}
           />
           <MetricCard
-            title="Promotion Units"
-            value={analytics.promoUnits.toLocaleString("en-PH")}
-            note="Items sold under promotion periods"
+            title="Attributed Units"
+            value={filteredPromotionUnits.toLocaleString("en-PH")}
+            note="Discounted items linked to campaigns"
             icon={Package}
           />
         </div>
@@ -1757,14 +1674,79 @@ export function PredictiveAnalytics() {
               <Sparkles className="h-5 w-5 text-yellow-400" />
               Promotion Performance
             </CardTitle>
-            <p className="text-sm text-white/55">Top campaigns ranked by estimated revenue contribution.</p>
+            <p className="text-sm text-white/55">Completed transaction lines attributed to each campaign.</p>
           </CardHeader>
           <CardContent>
+            <div className="mb-5 grid gap-3 rounded-2xl border border-[#2b2b36] bg-[#111118] p-4 md:grid-cols-2 xl:grid-cols-5">
+              <label className="relative xl:col-span-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
+                <input
+                  value={promotionSearchTerm}
+                  onChange={(event) => setPromotionSearchTerm(event.target.value)}
+                  placeholder="Search promotion..."
+                  className="h-10 w-full rounded-lg border border-[#2b2b36] bg-[#16161d] pl-9 pr-3 text-sm text-white outline-none focus:border-yellow-400"
+                />
+              </label>
+              <select
+                value={promotionStatusFilter}
+                onChange={(event) => setPromotionStatusFilter(event.target.value)}
+                className="h-10 rounded-lg border border-[#2b2b36] bg-[#16161d] px-3 text-sm text-white outline-none focus:border-yellow-400"
+              >
+                <option value="all">All statuses</option>
+                <option value="active">Active</option>
+                <option value="upcoming">Upcoming</option>
+                <option value="inactive">Inactive</option>
+                <option value="ended">Ended</option>
+              </select>
+              <select
+                value={promotionTypeFilter}
+                onChange={(event) => setPromotionTypeFilter(event.target.value)}
+                className="h-10 rounded-lg border border-[#2b2b36] bg-[#16161d] px-3 text-sm text-white outline-none focus:border-yellow-400"
+              >
+                <option value="all">All promotion types</option>
+                <option value="percentage">Percentage</option>
+                <option value="fixed">Fixed amount</option>
+                <option value="bogo">BOGO</option>
+                <option value="bundle">Bundle</option>
+              </select>
+              <input
+                type="date"
+                aria-label="Promotion range start"
+                value={promotionStartDate}
+                onChange={(event) => setPromotionStartDate(event.target.value)}
+                className="h-10 rounded-lg border border-[#2b2b36] bg-[#16161d] px-3 text-sm text-white outline-none focus:border-yellow-400"
+              />
+              <div className="flex gap-2">
+                <input
+                  type="date"
+                  aria-label="Promotion range end"
+                  value={promotionEndDate}
+                  onChange={(event) => setPromotionEndDate(event.target.value)}
+                  className="h-10 min-w-0 flex-1 rounded-lg border border-[#2b2b36] bg-[#16161d] px-3 text-sm text-white outline-none focus:border-yellow-400"
+                />
+                {(promotionSearchTerm || promotionStatusFilter !== "all" || promotionTypeFilter !== "all" || promotionStartDate || promotionEndDate) && (
+                  <button
+                    type="button"
+                    aria-label="Clear promotion filters"
+                    onClick={() => {
+                      setPromotionSearchTerm("");
+                      setPromotionStatusFilter("all");
+                      setPromotionTypeFilter("all");
+                      setPromotionStartDate("");
+                      setPromotionEndDate("");
+                    }}
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-[#2b2b36] text-white/60 hover:border-yellow-400 hover:text-yellow-300"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+            </div>
             <div className="mb-5 rounded-2xl border border-[#2b2b36] bg-[#111118] p-4">
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <p className="text-sm font-semibold text-white">Active Promotions Comparison</p>
-                  <p className="text-xs text-white/55">Revenue and units per campaign</p>
+                  <p className="text-sm font-semibold text-white">Filtered Promotions Comparison</p>
+                  <p className="text-xs text-white/55">Attributed revenue and units per campaign</p>
                 </div>
                 <div className="flex items-center gap-3 text-xs">
                   <span className="inline-flex items-center gap-1.5 text-white/75">
@@ -1777,9 +1759,9 @@ export function PredictiveAnalytics() {
                   </span>
                 </div>
               </div>
-              {analytics.activePromotionChart.length && hasActivePromotionPerformance ? (
+              {filteredPromotionChart.length && hasFilteredPromotionPerformance ? (
                 <ResponsiveContainer width="100%" height={280}>
-                  <BarChart data={analytics.activePromotionChart} margin={{ top: 8, right: 8, left: 8, bottom: 8 }} barGap={8}>
+                  <BarChart data={filteredPromotionChart} margin={{ top: 8, right: 8, left: 8, bottom: 8 }} barGap={8}>
                     <CartesianGrid strokeDasharray="2 4" stroke="#2f2f38" />
                     <XAxis dataKey="name" stroke="#a3a3a3" fontSize={12} interval={0} angle={0} textAnchor="middle" height={42} />
                     <YAxis yAxisId="left" stroke="#a3a3a3" fontSize={12} />
@@ -1800,9 +1782,9 @@ export function PredictiveAnalytics() {
                 </ResponsiveContainer>
               ) : (
                 <div className="rounded-xl border border-dashed border-[#2b2b36] bg-white/[0.02] p-5 text-center text-sm text-white/60">
-                  {analytics.activePromotionChart.length
-                    ? "Active promotions are detected, but no sales performance has been recorded yet."
-                    : "No active promotions yet. Activate a campaign to view comparison graph."}
+                  {filteredPromotionChart.length
+                    ? "The selected promotions have no attributed completed sales."
+                    : "No promotions match the selected filters."}
                 </div>
               )}
             </div>
@@ -1820,7 +1802,7 @@ export function PredictiveAnalytics() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {analytics.promotionPerformance.length ? analytics.promotionPerformance.slice(0, 10).map((promo) => (
+                  {paginatedPromotionPerformance.length ? paginatedPromotionPerformance.map((promo) => (
                     <TableRow key={promo.id} className="border-[#2b2b36] hover:bg-white/[0.03]">
                       <TableCell className="text-center font-semibold text-white">{promo.name}</TableCell>
                       <TableCell className="text-center text-white/80">{promo.start} - {promo.end}</TableCell>
@@ -1836,13 +1818,22 @@ export function PredictiveAnalytics() {
                   )) : (
                     <TableRow className="border-[#2b2b36]">
                       <TableCell colSpan={6} className="py-8 text-center text-white/60">
-                        No promotion data yet. Create promotions to see campaign performance here.
+                        No promotions match the selected filters.
                       </TableCell>
                     </TableRow>
                   )}
                 </TableBody>
               </Table>
             </div>
+            <TablePagination
+              currentPage={safePromotionPage}
+              pageSize={promotionPageSize}
+              totalItems={filteredPromotionPerformance.length}
+              onPageChange={setPromotionCurrentPage}
+              onPageSizeChange={setPromotionPageSize}
+              pageSizeOptions={[5, 10, 15, 25]}
+              unitName="campaigns"
+            />
           </CardContent>
         </Card>
       </div>}

@@ -17,6 +17,7 @@ import { writeAuditLog } from '../../lib/audit';
 import { supabase } from '../../lib/supabase';
 import { buildAudience } from '../../lib/promotion-audience';
 import { PromotionNotifyDialog } from './PromotionNotifyDialog';
+import { calculatePromotionPerformance } from '../../lib/promotion-performance';
 
 type Promotion = {
   promo_id: string;
@@ -331,37 +332,6 @@ function resolvePromotionTargetProducts(targetProducts: string | undefined, prod
   });
 }
 
-function saleIsCompleted(sale: any) {
-  const payment = Array.isArray(sale?.payment) ? sale.payment[0] : sale?.payment;
-  const status = String(payment?.payment_status ?? sale?.payment_status ?? '').toLowerCase();
-  return status === 'completed' || status === 'paid' || !status;
-}
-
-function productDetailMatchesPromotion(detail: any, promotion: Promotion) {
-  return productDetailPromotionSpecificity(detail, promotion) > 0;
-}
-
-function productDetailPromotionSpecificity(detail: any, promotion: Promotion) {
-  const detailProductId = String(detail?.product_id ?? '').trim();
-  if (detailProductId && promotion.targetProductIds.includes(detailProductId)) return 3;
-
-  const product = Array.isArray(detail?.product) ? detail.product[0] : detail?.product;
-  const productName = String(product?.product_name ?? '').trim().toLowerCase();
-  const category = Array.isArray(product?.category) ? product.category[0] : product?.category;
-  const categoryName = String(category?.category_name ?? '').trim().toLowerCase();
-  const parsed = parseTargetProducts(promotion.targetProducts);
-  const wantsAll = !parsed.categories.length && !parsed.products.length;
-  const categories = new Set(parsed.categories.map((item) => item.trim().toLowerCase()));
-  const products = new Set(parsed.products.map((item) => item.trim().toLowerCase()));
-
-  if (wantsAll) return 1;
-  if (products.size > 0) {
-    if (!products.has(productName)) return 0;
-    return !categories.size || categories.has(categoryName) ? 3 : 0;
-  }
-  return categories.has(categoryName) ? 2 : 0;
-}
-
 function sanitizeTargetProductsToSellable(
   targetProducts: string | undefined,
   categoryOptions: string[],
@@ -620,23 +590,19 @@ export function PromotionManagement() {
   const promotions: Promotion[] = useMemo(() => {
     const rows = (promotionsQuery.data as any[]) ?? [];
     const sales = (salesQuery.data as any[]) ?? [];
+    const productsById = new Map(
+      ((productsQuery.data as any[]) ?? []).map((product: any) => [String(product.product_id ?? ''), product]),
+    );
+    const performanceById = new Map(
+      calculatePromotionPerformance(rows, sales, productsById).map((performance) => [performance.id, performance]),
+    );
     return rows.map((row) => {
       const rawType = String(row.discount_type ?? 'Percentage').toLowerCase();
       const discount_type: Promotion['discount_type'] = decodeDisplayType(rawType, row.promo_name);
-      const rawStatus = String(row.status ?? 'active').toLowerCase();
-      const nowMs = Date.now();
       const start = normalizePromotionDateTime(String(row.start_date ?? ''), 'start');
       const end = normalizePromotionDateTime(String(row.end_date ?? ''), 'end');
-      const startMs = promotionTimeMs(start, 'start');
-      const endMs = promotionTimeMs(end, 'end');
-      const status: Promotion['status'] =
-        rawStatus === 'inactive' || rawStatus === 'deactivated'
-          ? 'Inactive'
-          : rawStatus.includes('expired') || endMs < nowMs
-            ? 'Ended'
-            : startMs <= nowMs && nowMs <= endMs
-              ? 'Active'
-              : 'Upcoming';
+      const performance = performanceById.get(String(row.promo_id ?? ''));
+      const status: Promotion['status'] = performance?.status ?? 'Upcoming';
       const targetSalesGoal = Number(row.target_sales_goal ?? row.targetSalesGoal ?? 10000) || 10000;
       const targetProductIds = (Array.isArray(row.promo_product) ? row.promo_product : [])
         .map((link: any) => {
@@ -659,85 +625,14 @@ export function PromotionManagement() {
         targetSalesGoal,
         targetProductIds,
       };
-      const performance = sales.reduce(
-        (sum, sale: any) => {
-          if (!saleIsCompleted(sale)) return sum;
-          const saleTime = saleTimestampMs(sale.transaction_date ?? sale.created_at);
-          if (Number.isNaN(saleTime)) return sum;
-          if (saleTime < startMs || saleTime > endMs) return sum;
-          const details = Array.isArray(sale.sales_details) ? sale.sales_details : [];
-          details.forEach((detail: any) => {
-            const detailPromoId = String(detail?.promo_id ?? '').trim();
-            const hasExplicitPromo = Boolean(detailPromoId);
-            if (hasExplicitPromo && detailPromoId !== basePromotion.promo_id) return;
-            if (!hasExplicitPromo) {
-              const winningPromotion = rows
-                .map((candidateRow: any) => {
-                  const candidateStart = normalizePromotionDateTime(String(candidateRow.start_date ?? ''), 'start');
-                  const candidateEnd = normalizePromotionDateTime(String(candidateRow.end_date ?? ''), 'end');
-                  const candidateStartMs = promotionTimeMs(candidateStart, 'start');
-                  const candidateEndMs = promotionTimeMs(candidateEnd, 'end');
-                  if (saleTime < candidateStartMs || saleTime > candidateEndMs) return null;
-                  const candidateType = decodeDisplayType(String(candidateRow.discount_type ?? 'Percentage').toLowerCase(), candidateRow.promo_name);
-                  const candidateTargetIds = (Array.isArray(candidateRow.promo_product) ? candidateRow.promo_product : [])
-                    .map((link: any) => {
-                      const product = Array.isArray(link?.product) ? link.product[0] : link?.product;
-                      return String(link?.product_id ?? product?.product_id ?? '').trim();
-                    })
-                    .filter(Boolean);
-                  const candidatePromotion = {
-                    promo_id: String(candidateRow.promo_id ?? ''),
-                    promo_name: stripPromoTypeMarker(String(candidateRow.promo_name ?? 'Promotion')),
-                    discount_type: candidateType,
-                    discount_value: Number(candidateRow.discount_value ?? 0),
-                    targetProducts: String(candidateRow.target_products ?? candidateRow.targetProducts ?? deriveTargetProductsFromLinks(candidateRow)),
-                    start_date: candidateStart,
-                    end_date: candidateEnd,
-                    status: 'Active' as Promotion['status'],
-                    salesGenerated: 0,
-                    unitsAffected: 0,
-                    effectiveness: 0,
-                    targetSalesGoal: Number(candidateRow.target_sales_goal ?? candidateRow.targetSalesGoal ?? 10000) || 10000,
-                    targetProductIds: candidateTargetIds,
-                  };
-                  const specificity = productDetailPromotionSpecificity(detail, candidatePromotion);
-                  if (!specificity) return null;
-                  return {
-                    promo_id: candidatePromotion.promo_id,
-                    specificity,
-                    typePriority: getPromoPriority(candidatePromotion.discount_type),
-                    discountValue: Number(candidatePromotion.discount_value ?? 0),
-                    startMs: candidateStartMs,
-                  };
-                })
-                .filter(Boolean)
-                .sort((a: any, b: any) => {
-                  if (b.specificity !== a.specificity) return b.specificity - a.specificity;
-                  if (b.typePriority !== a.typePriority) return b.typePriority - a.typePriority;
-                  if (b.discountValue !== a.discountValue) return b.discountValue - a.discountValue;
-                  return b.startMs - a.startMs;
-                })[0] as any;
-              if (winningPromotion?.promo_id !== basePromotion.promo_id) return;
-            }
-            const quantity = Number(detail.quantity ?? 0);
-            const lineSubtotal = Number(detail.subtotal ?? 0);
-            const fallbackSubtotal = Number(detail.price ?? 0) * quantity;
-            sum.sales += lineSubtotal > 0 ? lineSubtotal : fallbackSubtotal;
-            sum.units += quantity;
-          });
-          return sum;
-        },
-        { sales: 0, units: 0 },
-      );
-
       return {
         ...basePromotion,
-        salesGenerated: Math.round(performance.sales),
-        unitsAffected: performance.units,
-        effectiveness: Math.min(100, Math.round((performance.sales / Math.max(1, targetSalesGoal)) * 100)),
+        salesGenerated: Math.round(performance?.revenue ?? 0),
+        unitsAffected: performance?.units ?? 0,
+        effectiveness: Math.min(100, Math.round(((performance?.revenue ?? 0) / Math.max(1, targetSalesGoal)) * 100)),
       };
     });
-  }, [promotionsQuery.data, salesQuery.data]);
+  }, [productsQuery.data, promotionsQuery.data, salesQuery.data]);
 
   const productRecommendations = useMemo<PromotionRecommendation[]>(() => {
     const sales = (salesQuery.data as any[]) ?? [];
