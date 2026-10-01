@@ -11,6 +11,7 @@ import {
   Cell,
   Line,
   LineChart,
+  Legend,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -50,6 +51,24 @@ const productPeriodDays: Record<RevenueTrendPeriod, number> = {
   quarterly: 90,
   annually: 365,
 };
+
+const GENDER_COLOR_MAP: Record<string, string> = {
+  Women: "#fb7185",
+  Men: "#38bdf8",
+  Unisex: "#facc15",
+  Kids: "#4ade80",
+};
+
+function getAnalyticsPeriodStart(now: Date, period: RevenueTrendPeriod) {
+  const start = new Date(now);
+  if (period === "daily") start.setDate(now.getDate() - 30);
+  if (period === "weekly") start.setDate(now.getDate() - 84);
+  if (period === "monthly") start.setMonth(now.getMonth() - 11);
+  if (period === "quarterly") start.setMonth(now.getMonth() - 21);
+  if (period === "annually") start.setFullYear(now.getFullYear() - 4);
+  start.setHours(0, 0, 0, 0);
+  return start;
+}
 
 function money(value: number) {
   return `PHP ${Math.round(value || 0).toLocaleString("en-PH")}`;
@@ -455,9 +474,7 @@ export function PredictiveAnalytics() {
     const productPeriodStart = new Date(now);
     productPeriodStart.setDate(now.getDate() - productPeriodDays[effectiveProductAnalyticsPeriod]);
     productPeriodStart.setHours(0, 0, 0, 0);
-    const customerPeriodStart = new Date(now);
-    customerPeriodStart.setDate(now.getDate() - productPeriodDays[customerAnalyticsPeriod]);
-    customerPeriodStart.setHours(0, 0, 0, 0);
+    const customerPeriodStart = getAnalyticsPeriodStart(now, customerAnalyticsPeriod);
     const productPeriodLabel =
       productAnalyticsPeriod === "custom"
         ? customStartDate && customEndDate
@@ -708,17 +725,6 @@ export function PredictiveAnalytics() {
     const predictedNextMonth = Math.round((revenue30 / activeSalesDays) * 30);
     const projectedUnits = Math.round((last30Days.reduce((sum, row) => sum + row.units, 0) / activeSalesDays) * 30);
 
-    const getPeriodStart = (period: RevenueTrendPeriod) => {
-      const start = new Date(now);
-      if (period === "daily") start.setDate(now.getDate() - 30);
-      if (period === "weekly") start.setDate(now.getDate() - 84);
-      if (period === "monthly") start.setMonth(now.getMonth() - 11);
-      if (period === "quarterly") start.setMonth(now.getMonth() - 21);
-      if (period === "annually") start.setFullYear(now.getFullYear() - 4);
-      start.setHours(0, 0, 0, 0);
-      return start;
-    };
-
     const labelForPeriodDate = (date: Date, period: RevenueTrendPeriod) => {
       if (period === "weekly") {
         const weekEnd = addDays(date, 6);
@@ -802,14 +808,14 @@ export function PredictiveAnalytics() {
       return Array.from(buckets.values()).sort((a, b) => a.date.getTime() - b.date.getTime());
     };
 
-    const trendChart = buildPeriodBuckets(revenueTrendPeriod, getPeriodStart(revenueTrendPeriod), true)
+    const trendChart = buildPeriodBuckets(revenueTrendPeriod, getAnalyticsPeriodStart(now, revenueTrendPeriod), true)
       .map((row) => ({
         date: row.label,
         revenue: Math.round(row.revenue),
         units: row.units,
       }));
 
-    const forecastHistory = buildPeriodBuckets(salesForecastPeriod, getPeriodStart(salesForecastPeriod));
+    const forecastHistory = buildPeriodBuckets(salesForecastPeriod, getAnalyticsPeriodStart(now, salesForecastPeriod));
     const recentForecastBase = forecastHistory.filter((row) => row.revenue > 0 || row.units > 0).slice(-6);
     const forecastBase = recentForecastBase.length ? recentForecastBase : forecastHistory.slice(-3);
     const selectedPeriodBase = forecastBase.length ? forecastBase : forecastHistory;
@@ -989,13 +995,6 @@ export function PredictiveAnalytics() {
 
     const isKnownGender = (label: string) => !["unknown", "n/a", "none"].includes(String(label).trim().toLowerCase());
 
-    const genderColorMap: Record<string, string> = {
-      Women: "#fb7185",
-      Men: "#38bdf8",
-      Unisex: "#facc15",
-      Kids: "#4ade80",
-    };
-
     const genderRows = Array.from(genderSegments.values())
       .map(formatCustomerSegment)
       .filter((row) => isKnownGender(row.label))
@@ -1003,15 +1002,51 @@ export function PredictiveAnalytics() {
 
     const topBuyingGender = genderRows[0] ?? null;
 
-    const genderChart = genderRows.map((row) => ({
-      name: row.label,
-      fullLabel: row.label,
-      revenue: Math.round(row.revenue),
-      units: row.units,
-      orders: row.orders,
-      customers: row.customers,
-      fill: genderColorMap[row.label] ?? "#facc15",
-    }));
+    const genderTrendBuckets = new Map<string, Record<string, any>>();
+    let genderCursor = bucketFor(customerPeriodStart, customerAnalyticsPeriod).date;
+    while (genderCursor <= now) {
+      const bucket = bucketFor(genderCursor, customerAnalyticsPeriod);
+      genderTrendBuckets.set(bucket.key, { key: bucket.key, date: bucket.date, label: bucket.label });
+      genderCursor = addPeriod(bucket.date, customerAnalyticsPeriod);
+    }
+
+    const genderTrendGroups = new Set<string>();
+    sales.forEach((sale: any) => {
+      const date = toDate(sale.transaction_date ?? sale.created_at);
+      if (!date || date < customerPeriodStart) return;
+      const bucketInfo = bucketFor(date, customerAnalyticsPeriod);
+      const bucket = genderTrendBuckets.get(bucketInfo.key) ?? {
+        key: bucketInfo.key,
+        date: bucketInfo.date,
+        label: bucketInfo.label,
+      };
+      const customer = getOne(sale.customer) ?? customerMap.get(String(sale.customer_id ?? ""));
+      const customerGender = getCustomerGender(customer);
+      const details = Array.isArray(sale.sales_details) ? sale.sales_details : [];
+      details.forEach((detail: any) => {
+        const product = getOne(detail.product) ?? productMap.get(String(detail.product_id ?? ""));
+        const gender = customerGender || getCustomerGender(null, String(product?.gender ?? "")) || "Unisex";
+        if (!isKnownGender(gender)) return;
+        genderTrendGroups.add(gender);
+        bucket[gender] = Number(bucket[gender] ?? 0) + getSaleDetailRevenue(detail);
+      });
+      genderTrendBuckets.set(bucketInfo.key, bucket);
+    });
+
+    const genderTrendChart = Array.from(genderTrendBuckets.values())
+      .sort((a, b) => (a.date as Date).getTime() - (b.date as Date).getTime())
+      .map((bucket) => {
+        const row: Record<string, string | number> = { date: String(bucket.label) };
+        genderTrendGroups.forEach((gender) => {
+          row[gender] = Math.round(Number(bucket[gender] ?? 0));
+        });
+        return row;
+      });
+    const orderedGenderTrendGroups = Array.from(genderTrendGroups).sort((a, b) => {
+      const aRank = genderRows.findIndex((row) => row.label === a);
+      const bRank = genderRows.findIndex((row) => row.label === b);
+      return (aRank < 0 ? 999 : aRank) - (bRank < 0 ? 999 : bRank) || a.localeCompare(b);
+    });
 
     const buildRankingRows = (rows: any[]) => {
       const total = rows.reduce((sum, row) => sum + Number(row[topRankingMetric] ?? 0), 0);
@@ -1151,7 +1186,8 @@ export function PredictiveAnalytics() {
       categoryChart,
       segmentRows,
       genderRows,
-      genderChart,
+      genderTrendChart,
+      genderTrendGroups: orderedGenderTrendGroups,
       topBuyingGender,
       customerPeriodLabel,
       topBrands,
@@ -2356,13 +2392,17 @@ export function PredictiveAnalytics() {
       {showCustomer && (
       <div className="grid grid-cols-1 gap-5">
         <Card className="bg-[#16161d] border-[#2b2b36]">
-          <CardContent className="pt-5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+          <CardHeader className="pb-3">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div>
-                <p className="text-sm font-semibold text-white">Customer Analytics Period</p>
-                <p className="text-xs text-white/50">Filter customer demand and sales by gender across time windows.</p>
+                <CardTitle className="flex items-center gap-2 text-white">
+                  <Users className="h-5 w-5 text-yellow-400" /> Gender Analytics
+                </CardTitle>
+                <p className="mt-1 text-sm text-white/55">
+                  Customer revenue grouped by {analytics.customerPeriodLabel.toLowerCase()} period.
+                </p>
               </div>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {customerPeriodOptions.map((option) => {
                   const active = customerAnalyticsPeriod === option.id;
                   return (
@@ -2370,7 +2410,7 @@ export function PredictiveAnalytics() {
                       key={option.id}
                       type="button"
                       onClick={() => setCustomerAnalyticsPeriod(option.id)}
-                      className={`rounded-xl px-4 py-2 text-xs font-semibold transition ${
+                      className={`rounded-xl px-3 py-2 text-xs font-semibold transition ${
                         active
                           ? "bg-yellow-400 text-red-950"
                           : "border border-[#2b2b36] bg-white/[0.03] text-white/70 hover:border-yellow-400/50 hover:text-yellow-200"
@@ -2380,23 +2420,8 @@ export function PredictiveAnalytics() {
                     </button>
                   );
                 })}
+                <Badge className="bg-yellow-400 text-red-950">{analytics.genderRows.length} groups</Badge>
               </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-[#16161d] border-[#2b2b36]">
-          <CardHeader className="pb-3">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <CardTitle className="flex items-center gap-2 text-white">
-                  <Users className="h-5 w-5 text-yellow-400" /> Gender Analytics
-                </CardTitle>
-                <p className="mt-2 text-sm text-white/55">
-                  Demand and purchase volume grouped by customer demographic ({analytics.customerPeriodLabel}).
-                </p>
-              </div>
-              <Badge className="bg-yellow-400 text-red-950">{analytics.genderRows.length} groups</Badge>
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -2439,27 +2464,36 @@ export function PredictiveAnalytics() {
             {analytics.genderRows.length ? (
               <div className="space-y-3">
                 <div className="rounded-2xl border border-[#2b2b36] bg-[#111118] p-4">
-                  <div className="h-[260px]">
+                  <div className="mb-3">
+                    <p className="text-sm font-semibold text-white">Revenue by Customer Demographic</p>
+                    <p className="mt-1 text-xs text-white/45">Each line shows how much revenue a customer demographic generated over time.</p>
+                  </div>
+                  <div className="h-[300px]">
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={analytics.genderChart}>
-                        <CartesianGrid stroke="#2b2b36" vertical={false} />
-                        <XAxis dataKey="name" stroke="#a1a1aa" tick={{ fill: "#d4d4d8", fontSize: 12 }} />
-                        <YAxis stroke="#a1a1aa" tick={{ fill: "#d4d4d8", fontSize: 12 }} />
+                      <LineChart data={analytics.genderTrendChart} margin={{ top: 12, right: 16, left: 0, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#2f2f38" vertical={false} />
+                        <XAxis dataKey="date" stroke="#a3a3a3" fontSize={12} minTickGap={24} tickMargin={8} />
+                        <YAxis stroke="#a3a3a3" fontSize={12} allowDecimals={false} />
                         <Tooltip
                           contentStyle={{ background: "#16161C", border: "1px solid rgba(255, 255, 255, 0.15)", borderRadius: 12, boxShadow: "0 8px 24px rgba(0,0,0,0.6)", padding: "10px 14px", color: "#FFFFFF" }}
                           labelStyle={{ color: "#FFFFFF", fontWeight: 600, fontSize: 13, marginBottom: 4 }}
                           itemStyle={{ color: "#FFFFFF", fontSize: 12, fontWeight: 500 }}
-                          formatter={(value: any, _name: string, item: any) => [
-                            `${money(Number(value))} (${item?.payload?.units ?? 0} units)`,
-                            "Revenue",
-                          ]}
+                          formatter={(value: any, name: string) => [money(Number(value)), `${name} Revenue`]}
                         />
-                        <Bar dataKey="revenue" radius={[8, 8, 0, 0]}>
-                          {analytics.genderChart.map((row: any) => (
-                            <Cell key={row.fullLabel} fill={row.fill} />
-                          ))}
-                        </Bar>
-                      </BarChart>
+                        <Legend wrapperStyle={{ fontSize: 12, paddingTop: 10 }} />
+                        {analytics.genderTrendGroups.map((gender: string) => (
+                          <Line
+                            key={gender}
+                            type="monotone"
+                            dataKey={gender}
+                            name={gender}
+                            stroke={GENDER_COLOR_MAP[gender] ?? "#facc15"}
+                            strokeWidth={3}
+                            dot={{ r: 3, fill: "#16161d", stroke: GENDER_COLOR_MAP[gender] ?? "#facc15", strokeWidth: 2 }}
+                            activeDot={{ r: 6, fill: GENDER_COLOR_MAP[gender] ?? "#facc15", stroke: "#16161d", strokeWidth: 2 }}
+                          />
+                        ))}
+                      </LineChart>
                     </ResponsiveContainer>
                   </div>
                 </div>
