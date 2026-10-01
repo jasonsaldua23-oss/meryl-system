@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Badge } from "./ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
-import { Award, BarChart3, ChevronLeft, ChevronRight, Filter, Package, RefreshCw, Search, Sparkles, TrendingUp, Users, X } from "lucide-react";
+import { Award, BarChart3, ChevronLeft, ChevronRight, Filter, Layers, Package, RefreshCw, Search, Sparkles, TrendingUp, Users, X } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -53,11 +53,15 @@ const productPeriodDays: Record<RevenueTrendPeriod, number> = {
   annually: 365,
 };
 
-const GENDER_COLOR_MAP: Record<string, string> = {
+const DEPARTMENT_COLOR_MAP: Record<string, string> = {
   Women: "#fb7185",
+  "Women's": "#fb7185",
   Men: "#38bdf8",
+  "Men's": "#38bdf8",
   Unisex: "#facc15",
 };
+
+const GENDER_COLOR_MAP = DEPARTMENT_COLOR_MAP;
 
 function getAnalyticsPeriodStart(now: Date, period: RevenueTrendPeriod) {
   const start = new Date(now);
@@ -583,9 +587,9 @@ export function PredictiveAnalytics() {
           segment.topProducts.set(productName, (segment.topProducts.get(productName) ?? 0) + qty);
         }
         if (inCustomerPeriod) {
-          const itemGender = explicitCustomerGender || getCustomerGender(null, productGender) || "Unisex";
-          const genderSegment = genderSegments.get(itemGender) ?? {
-            label: itemGender,
+          const itemDepartment = normalizeProductDepartment(product?.gender) || explicitCustomerGender || "Unisex";
+          const genderSegment = genderSegments.get(itemDepartment) ?? {
+            label: itemDepartment,
             customers: new Set<string>(),
             orders: new Set<string>(),
             units: 0,
@@ -620,7 +624,7 @@ export function PredictiveAnalytics() {
           genderSegment.topSizes.set(size, (genderSegment.topSizes.get(size) ?? 0) + qty);
           genderSegment.topProducts.set(productName, (genderSegment.topProducts.get(productName) ?? 0) + qty);
 
-          genderSegments.set(itemGender, genderSegment);
+          genderSegments.set(itemDepartment, genderSegment);
         }
 
         if (id) {
@@ -1025,10 +1029,10 @@ export function PredictiveAnalytics() {
       const details = Array.isArray(sale.sales_details) ? sale.sales_details : [];
       details.forEach((detail: any) => {
         const product = getOne(detail.product) ?? productMap.get(String(detail.product_id ?? ""));
-        const gender = customerGender || getCustomerGender(null, String(product?.gender ?? "")) || "Unisex";
-        if (!isKnownGender(gender)) return;
-        genderTrendGroups.add(gender);
-        bucket[gender] = Number(bucket[gender] ?? 0) + getSaleDetailRevenue(detail);
+        const department = normalizeProductDepartment(product?.gender) || customerGender || "Unisex";
+        if (!isKnownGender(department)) return;
+        genderTrendGroups.add(department);
+        bucket[department] = Number(bucket[department] ?? 0) + getSaleDetailRevenue(detail);
       });
       genderTrendBuckets.set(bucketInfo.key, bucket);
     });
@@ -1428,7 +1432,7 @@ export function PredictiveAnalytics() {
 
   const filterTabs = [
     { id: "product" as const, label: "Product Analytics", icon: Package, count: analytics.productMovement.length },
-    { id: "customer" as const, label: "Customer Analytics", icon: Users, count: analytics.genderRows.length },
+    { id: "customer" as const, label: "Department Analytics", icon: Layers, count: analytics.genderRows.length },
     { id: "sales" as const, label: "Sales Analytics", icon: TrendingUp, count: analytics.trendChart.filter((row) => row.revenue > 0).length },
     { id: "promotion" as const, label: "Promotion Analytics", icon: Sparkles, count: analytics.promotionPerformance.length },
   ];
@@ -2396,10 +2400,10 @@ export function PredictiveAnalytics() {
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div>
                 <CardTitle className="flex items-center gap-2 text-white">
-                  <Users className="h-5 w-5 text-yellow-400" /> Gender Analytics
+                  <Layers className="h-5 w-5 text-yellow-400" /> Department Analytics
                 </CardTitle>
                 <p className="mt-1 text-sm text-white/55">
-                  Customer revenue grouped by {analytics.customerPeriodLabel.toLowerCase()} period.
+                  Footwear department revenue and sales performance grouped by {analytics.customerPeriodLabel.toLowerCase()} period.
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -2420,7 +2424,7 @@ export function PredictiveAnalytics() {
                     </button>
                   );
                 })}
-                <Badge className="bg-yellow-400 text-red-950">{analytics.genderRows.length} groups</Badge>
+                <Badge className="bg-yellow-400 text-red-950">{analytics.genderRows.length} departments</Badge>
               </div>
             </div>
           </CardHeader>
@@ -2433,10 +2437,10 @@ export function PredictiveAnalytics() {
                   </div>
                   <div>
                     <p className="text-[11px] font-semibold uppercase tracking-wider text-yellow-400">
-                      Top Buying Customer Demographic
+                      Top Performing Footwear Department
                     </p>
                     <p className="text-lg font-bold text-white">
-                      {analytics.topBuyingGender.label} Customers Buy The Most
+                      {analytics.topBuyingGender.label} Department Leads In Sales
                     </p>
                   </div>
                 </div>
@@ -2465,8 +2469,8 @@ export function PredictiveAnalytics() {
               <div className="space-y-3">
                 <div className="rounded-2xl border border-[#2b2b36] bg-[#111118] p-4">
                   <div className="mb-3">
-                    <p className="text-sm font-semibold text-white">Revenue by Customer Demographic</p>
-                    <p className="mt-1 text-xs text-white/45">Each line shows how much revenue a customer demographic generated over time.</p>
+                    <p className="text-sm font-semibold text-white">Revenue by Footwear Department</p>
+                    <p className="mt-1 text-xs text-white/45">Each line shows how much revenue each footwear department generated over time.</p>
                   </div>
                   <div className="h-[300px]">
                     <ResponsiveContainer width="100%" height="100%">
@@ -2487,10 +2491,10 @@ export function PredictiveAnalytics() {
                             type="monotone"
                             dataKey={gender}
                             name={gender}
-                            stroke={GENDER_COLOR_MAP[gender] ?? "#facc15"}
+                            stroke={DEPARTMENT_COLOR_MAP[gender] ?? "#facc15"}
                             strokeWidth={3}
-                            dot={{ r: 3, fill: "#16161d", stroke: GENDER_COLOR_MAP[gender] ?? "#facc15", strokeWidth: 2 }}
-                            activeDot={{ r: 6, fill: GENDER_COLOR_MAP[gender] ?? "#facc15", stroke: "#16161d", strokeWidth: 2 }}
+                            dot={{ r: 3, fill: "#16161d", stroke: DEPARTMENT_COLOR_MAP[gender] ?? "#facc15", strokeWidth: 2 }}
+                            activeDot={{ r: 6, fill: DEPARTMENT_COLOR_MAP[gender] ?? "#facc15", stroke: "#16161d", strokeWidth: 2 }}
                           />
                         ))}
                       </LineChart>
@@ -2513,7 +2517,7 @@ export function PredictiveAnalytics() {
                     </colgroup>
                     <TableHeader className="bg-[#1f1f28]">
                       <TableRow className="border-[#2b2b36] hover:bg-[#1f1f28]">
-                        <TableHead className="py-3 text-center text-sm font-semibold text-white">Gender</TableHead>
+                        <TableHead className="py-3 text-center text-sm font-semibold text-white">Department</TableHead>
                         <TableHead className="py-3 text-center text-sm font-semibold text-white">Top Brand</TableHead>
                         <TableHead className="py-3 text-center text-sm font-semibold text-white">Top Size</TableHead>
                         <TableHead className="py-3 text-center text-sm font-semibold text-white">Top Product</TableHead>
@@ -2548,9 +2552,9 @@ export function PredictiveAnalytics() {
               </div>
             ) : (
               <div className="rounded-2xl border border-dashed border-[#2b2b36] bg-[#111118] p-6 text-center">
-                <p className="font-semibold text-white/70">No gender analytics yet</p>
-                <p className="mt-1 text-sm text-white/45">Add gender values to customer profiles to unlock this view.</p>
-                <p className="mt-1 text-sm text-white/45">Record sales or adjust the period filter to view customer demographic demand.</p>
+                <p className="font-semibold text-white/70">No department analytics yet</p>
+                <p className="mt-1 text-sm text-white/45">Sales data across footwear departments (Men, Women, Unisex) will appear here once recorded.</p>
+                <p className="mt-1 text-sm text-white/45">Record sales or adjust the period filter to view department demand trends.</p>
               </div>
             )} 
           </CardContent>
