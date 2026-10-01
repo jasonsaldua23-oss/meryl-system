@@ -21,6 +21,7 @@ import {
 import { useCustomers, useProducts, usePromotions, useReturns, useSales } from "../../lib/hooks";
 import { productAnalyticsSnapshotsApi } from "../../lib/api";
 import { localDateKey } from "../../lib/datetime";
+import { getSizeCurveAvailability, matchesSizeCurveScope, sizeCurveStyleKey, type SizeCurveScope } from "../../lib/size-curve";
 
 type RevenueTrendPeriod = "daily" | "weekly" | "monthly" | "quarterly" | "annually";
 type ProductAnalyticsPeriod = RevenueTrendPeriod | "custom";
@@ -319,6 +320,7 @@ export function PredictiveAnalytics() {
   const [productMovementFilter, setProductMovementFilter] = useState("all");
   const [productPageSize, setProductPageSize] = useState<number>(10);
   const [productCurrentPage, setProductCurrentPage] = useState<number>(1);
+  const [sizeCurveScope, setSizeCurveScope] = useState<SizeCurveScope>("current");
   const salesQuery = useSales();
   const productsQuery = useProducts();
   const customersQuery = useCustomers();
@@ -492,6 +494,7 @@ export function PredictiveAnalytics() {
         stock: getStock(product),
         reorder: getReorder(product),
         price: getPrice(product),
+        ...getSizeCurveAvailability(product),
         units30: 0,
         units90: 0,
         unitsPeriod: 0,
@@ -614,6 +617,7 @@ export function PredictiveAnalytics() {
             stock: getStock(product),
             reorder: getReorder(product),
             price: getPrice(product, detail),
+            ...getSizeCurveAvailability(product),
             units30: 0,
             units90: 0,
             unitsPeriod: 0,
@@ -1200,6 +1204,7 @@ export function PredictiveAnalytics() {
           category: String(row.category_name ?? getCategory(product)),
           size: String(row.size_label ?? product?.size ?? "N/A"),
           gender: String(product?.gender ?? "N/A"),
+          ...getSizeCurveAvailability(product),
           stock,
           reorder,
           price: Number(row.average_unit_price ?? getPrice(product)),
@@ -1351,8 +1356,8 @@ export function PredictiveAnalytics() {
   };
 
   const sizeCurveProducts = (isFilteringProducts ? filteredProductMovement : analytics.productMovement)
-    .filter((product) => isEuShoeSize(product.size))
-    .slice(0, 60);
+    .filter((product) => matchesSizeCurveScope(product, sizeCurveScope))
+    .filter((product) => isEuShoeSize(product.size));
   const sizeCurveSizes = Array.from(
     new Set(sizeCurveProducts.map((product) => String(product.size ?? "N/A"))),
   )
@@ -1360,12 +1365,14 @@ export function PredictiveAnalytics() {
     .sort(sortSizeLabels);
   const sizeCurveRows = Array.from(
     sizeCurveProducts.reduce((map, product) => {
-      const key = [product.brand, product.name, product.category].join("::");
+      const key = sizeCurveStyleKey(product);
       const row = map.get(key) ?? {
         key,
         productName: product.name,
         brand: product.brand,
         category: product.category,
+        color: product.color,
+        gender: product.gender,
         totalSold: 0,
         totalStock: 0,
         sizes: new Map<string, any>(),
@@ -1925,9 +1932,35 @@ export function PredictiveAnalytics() {
               <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="font-semibold text-white">Size Curve Bubble Heatmap</p>
-                  <p className="mt-1 text-xs text-white/50">Rows are product styles, columns are sizes. Color shows sales velocity; bubble size shows available stock depth.</p>
+                  <p className="mt-1 text-xs text-white/50">
+                    {sizeCurveScope === "current"
+                      ? "Active inventory only. Color shows sales velocity; bubble size shows available stock depth."
+                      : "Products sold in the selected period, including archived history."}
+                  </p>
                 </div>
-                <Badge className="bg-yellow-400 text-red-950">{sizeCurveRows.length} styles</Badge>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex rounded-lg border border-[#30303d] bg-[#171720] p-1">
+                    <button
+                      type="button"
+                      onClick={() => setSizeCurveScope("current")}
+                      className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                        sizeCurveScope === "current" ? "bg-yellow-400 text-red-950" : "text-white/55 hover:text-white"
+                      }`}
+                    >
+                      Current Inventory
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSizeCurveScope("historical")}
+                      className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                        sizeCurveScope === "historical" ? "bg-yellow-400 text-red-950" : "text-white/55 hover:text-white"
+                      }`}
+                    >
+                      Historical Sales
+                    </button>
+                  </div>
+                  <Badge className="bg-yellow-400 text-red-950">{sizeCurveRows.length} styles</Badge>
+                </div>
               </div>
               {sizeCurveRows.length ? (
                 <div className="overflow-x-auto rounded-xl border border-[#24242f] bg-[#15151d]">
@@ -1954,7 +1987,9 @@ export function PredictiveAnalytics() {
                       <div key={row.key} className="contents">
                         <div className="sticky left-0 z-10 border-b border-r border-[#2b2b36] bg-[#15151d] px-3 py-3">
                           <p className="truncate text-sm font-semibold text-white" title={row.productName}>{row.productName}</p>
-                          <p className="truncate text-xs text-white/45">{row.brand} - {row.category}</p>
+                          <p className="truncate text-xs text-white/45">
+                            {[row.brand, row.category, row.color, row.gender].filter((value) => value && value !== "N/A").join(" - ")}
+                          </p>
                         </div>
                         {sizeCurveSizes.map((size) => {
                           const product = row.sizes.get(size);
