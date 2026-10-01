@@ -51,10 +51,12 @@ for (const receiptId of ['printable-receipt', 'printable-exchange-slip']) {
     const receipt = page.locator('#receipt-print-content');
     await expect(receipt).toBeVisible();
     const box = await receipt.boundingBox();
-    expect(box!.x).toBe(0);
+    const expectedWidth = 120 * 96 / 25.4;
+    expect(box!.x).toBeCloseTo((1280 - expectedWidth) / 2, 0);
     expect(box!.y).toBe(0);
-    expect(box!.width).toBeCloseTo(80 * 96 / 25.4, 0);
+    expect(box!.width).toBeCloseTo(expectedWidth, 0);
     expect(box!.height).toBeGreaterThan(700);
+    await expect(receipt).toHaveCSS('font-size', '13px');
     await expect(receipt.locator('p').last()).toHaveText('RECEIPT FOOTER');
     await expect(receipt.locator('.truncate')).toHaveCSS('white-space', 'normal');
     await expect(receipt.locator('svg')).toHaveCSS('width', '96px');

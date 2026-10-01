@@ -1,7 +1,7 @@
 /* ==========================================================================
    THERMAL RECEIPT STYLES
    - High-contrast white paper preview on screen (overriding dark mode)
-   - 80mm receipts on the printer's selected paper size
+   - Readable receipts on both regular sheets and 80mm thermal rolls
    ========================================================================== */
 
 /* SCREEN PREVIEW: Force authentic crisp white paper & dark ink */
@@ -50,6 +50,7 @@
 
   body.printing-receipt #receipt-print-root {
     display: block !important;
+    width: 100% !important;
   }
 
   #receipt-print-content {
@@ -57,25 +58,37 @@
     position: static !important;
     transform: none !important;
     translate: none !important;
-    width: 80mm !important;
+    width: 120mm !important;
     max-width: 100% !important;
     height: auto !important;
     max-height: none !important;
     overflow: visible !important;
-    margin: 0 !important;
-    padding: 2mm 3mm !important;
+    margin: 0 auto !important;
+    padding: 3mm 5mm !important;
     background: #ffffff !important;
     color: #000000 !important;
     border: none !important;
     box-shadow: none !important;
     border-radius: 0 !important;
     font-family: 'Courier New', Courier, monospace !important;
-    font-size: 11px !important;
-    line-height: 1.3 !important;
+    font-size: 13px !important;
+    line-height: 1.4 !important;
   }
 
   #receipt-print-content * {
     color: #000000 !important;
+    font-size: inherit !important;
+  }
+
+  #receipt-print-content img {
+    height: 14mm !important;
+    max-width: 100% !important;
+  }
+
+  /* Keep the decorative dashed separators on one line. */
+  #receipt-print-content [class*="tracking-widest"] {
+    font-size: 10px !important;
+    white-space: nowrap !important;
   }
 
   #receipt-print-content .truncate {
