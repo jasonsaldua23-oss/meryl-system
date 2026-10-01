@@ -7,6 +7,7 @@ import { useNotifications, useProducts, usePromotions, useSales } from "../../li
 import { useAuth } from "../../lib/auth-context";
 import { isPromotionLive, promotionBoundaryMs, promotionDisplayName } from "../../lib/promotion-rules";
 import { shortId } from "./ui/utils";
+import { normalizeProductDepartment } from "../../lib/product-department";
 import {
   loadNotificationState,
   rememberNotificationStateInTab,
@@ -55,7 +56,7 @@ function stockVariantLabel(product: any) {
   const name = String(product?.product_name ?? "Unknown Product").trim();
   const brand = String(product?.brand ?? "").trim();
   const sku = String(product?.sku ?? product?.product_id ?? "").trim();
-  const variant = compactParts([product?.color, product?.gender, product?.size ? `Size ${product.size}` : null]);
+  const variant = compactParts([product?.color, normalizeProductDepartment(product?.gender), product?.size ? `Size ${product.size}` : null]);
   const variantText = variant.length ? ` - ${variant.join(" / ")}` : "";
   const skuText = sku ? ` (${shortId(sku)})` : "";
   return `${brand ? `${brand} ` : ""}${name}${variantText}${skuText}`;

@@ -20,6 +20,7 @@ import { cleanProductImageUrl } from "../../lib/image-utils";
 import { formatStoreDateTime, storeDateDigits, storeToday } from "../../lib/datetime";
 import { isPromotionLive, promotionTargetMatches } from "../../lib/promotion-rules";
 import { exactIlikePattern, findCustomerWithEmail, isValidCustomerEmail, normalizeCustomerEmail } from "../../lib/customer-validation";
+import { normalizeProductDepartment } from "../../lib/product-department";
 import merylLogoBw from "../../assets/Meryl_Logo_BW.svg";
 
 type CartItem = {
@@ -447,7 +448,7 @@ export function PointOfSale() {
         brand: row.brand ?? "N/A",
         category: row.category?.[0]?.category_name ?? row.category?.category_name ?? "N/A",
         color: row.color ?? "N/A",
-        gender: row.gender ?? "N/A",
+        gender: normalizeProductDepartment(row.gender),
         size: row.size ?? "N/A",
         price: Number(inventory?.srp ?? row.cost_price ?? 0),
         stock_quantity: availableStock,

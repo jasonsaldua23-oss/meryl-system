@@ -23,6 +23,7 @@ import { useCustomers, useProducts, usePromotions, useReturns, useSales } from "
 import { productAnalyticsSnapshotsApi } from "../../lib/api";
 import { localDateKey } from "../../lib/datetime";
 import { getSizeCurveAvailability, matchesSizeCurveScope, sizeCurveStyleKey, type SizeCurveScope } from "../../lib/size-curve";
+import { normalizeProductDepartment } from "../../lib/product-department";
 
 type RevenueTrendPeriod = "daily" | "weekly" | "monthly" | "quarterly" | "annually";
 type ProductAnalyticsPeriod = RevenueTrendPeriod | "custom";
@@ -56,7 +57,6 @@ const GENDER_COLOR_MAP: Record<string, string> = {
   Women: "#fb7185",
   Men: "#38bdf8",
   Unisex: "#facc15",
-  Kids: "#4ade80",
 };
 
 function getAnalyticsPeriodStart(now: Date, period: RevenueTrendPeriod) {
@@ -222,7 +222,7 @@ function getCustomerGender(customer: any, fallbackProductGender?: string) {
     // Women before men: "women" contains "men".
     if (normalized.includes("women") || normalized === "female" || normalized === "f") return "Women";
     if (normalized.includes("men") || normalized === "male" || normalized === "m") return "Men";
-    if (normalized.includes("boy") || normalized.includes("girl") || normalized.includes("kid") || normalized.includes("child")) return "Kids";
+    if (normalized.includes("boy") || normalized.includes("girl") || normalized.includes("kid") || normalized.includes("child")) return "Unisex";
     return raw;
   }
   if (fallbackProductGender) {
@@ -230,7 +230,7 @@ function getCustomerGender(customer: any, fallbackProductGender?: string) {
     if (pNorm === "unisex" || pNorm.includes("unisex")) return "Unisex";
     if (pNorm.includes("women") || pNorm === "female" || pNorm === "f") return "Women";
     if (pNorm.includes("men") || pNorm === "male" || pNorm === "m") return "Men";
-    if (pNorm.includes("boy") || pNorm.includes("girl") || pNorm.includes("kid") || pNorm.includes("child")) return "Kids";
+    if (pNorm.includes("boy") || pNorm.includes("girl") || pNorm.includes("kid") || pNorm.includes("child")) return "Unisex";
   }
   return "";
 }
@@ -252,7 +252,7 @@ function getAgeRange(customer: any) {
   if (existing) return existing;
   const age = getCustomerAge(customer);
   if (!age) return "Unknown Age";
-  if (age <= 12) return "Kids 12 below";
+  if (age <= 12) return "Age 12 and below";
   if (age <= 17) return "Teens 13-17";
   if (age <= 24) return "Young Adults 18-24";
   if (age <= 34) return "Adults 25-34";
@@ -507,7 +507,7 @@ export function PredictiveAnalytics() {
         brand: String(product.brand ?? "N/A"),
         category: getCategory(product),
         size: String(product.size ?? "N/A"),
-        gender: String(product.gender ?? "N/A"),
+        gender: normalizeProductDepartment(product.gender),
         stock: getStock(product),
         reorder: getReorder(product),
         price: getPrice(product),
@@ -630,7 +630,7 @@ export function PredictiveAnalytics() {
             brand,
             category,
             size,
-            gender: String(product?.gender ?? "N/A"),
+            gender: normalizeProductDepartment(product?.gender),
             stock: getStock(product),
             reorder: getReorder(product),
             price: getPrice(product, detail),
@@ -1239,7 +1239,7 @@ export function PredictiveAnalytics() {
           brand: String(row.brand ?? product?.brand ?? "N/A"),
           category: String(row.category_name ?? getCategory(product)),
           size: String(row.size_label ?? product?.size ?? "N/A"),
-          gender: String(product?.gender ?? "N/A"),
+          gender: normalizeProductDepartment(product?.gender),
           ...getSizeCurveAvailability(product),
           stock,
           reorder,
@@ -1339,7 +1339,7 @@ export function PredictiveAnalytics() {
   const availableDepartments = useMemo(() => {
     const set = new Set<string>();
     analytics.productMovement.forEach((p) => {
-      const dept = String(p.gender ?? "").trim();
+      const dept = normalizeProductDepartment(p.gender);
       if (dept && dept !== "N/A" && dept !== "Unknown") set.add(dept);
     });
     return Array.from(set).sort();
@@ -1359,7 +1359,7 @@ export function PredictiveAnalytics() {
       if (productCategoryFilter !== "all" && String(p.category ?? "").toLowerCase() !== productCategoryFilter.toLowerCase()) {
         return false;
       }
-      if (productDepartmentFilter !== "all" && String(p.gender ?? "").toLowerCase() !== productDepartmentFilter.toLowerCase()) {
+      if (productDepartmentFilter !== "all" && normalizeProductDepartment(p.gender).toLowerCase() !== productDepartmentFilter.toLowerCase()) {
         return false;
       }
       if (productMovementFilter !== "all" && String(p.movement ?? "").toLowerCase() !== productMovementFilter.toLowerCase()) {

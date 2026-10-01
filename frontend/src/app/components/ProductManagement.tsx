@@ -16,6 +16,7 @@ import { logAuditEvent } from "../../lib/api/audit-logger";
 import { cleanProductImageUrl, getWebpageUrlWarning } from "../../lib/image-utils";
 import { TablePagination } from "./ui/table-pagination";
 import { storeToday } from "../../lib/datetime";
+import { normalizeProductDepartment, PRODUCT_DEPARTMENTS } from "../../lib/product-department";
 
 type InventoryStatus = "Active" | "Inactive";
 type ProductTab = "list" | "settings" | "inventory";
@@ -74,7 +75,7 @@ const defaultProductForm: ProductFormData = {
   brand: "",
   category_id: "",
   color: "",
-  gender: "",
+  gender: "Unisex",
   size: "",
   unit_price: 0,
   image_url: "",
@@ -282,7 +283,7 @@ export function ProductManagement({ view, onViewChange }: ProductManagementProps
 
   const categories = ((categoriesQuery.data as any[]) ?? []).filter((category: any) => {
     const name = String(category?.category_name ?? "").trim().toLowerCase();
-    // Departments (Men / Women / Kids) live on the product, not as categories,
+    // Departments live on the product, not as categories,
     // and "Sport Shoes" was retired (database/recategorize_products.sql).
     return !["kid", "kids", "men", "women", "sport shoes", "sports shoes"].includes(name);
   });
@@ -317,7 +318,7 @@ export function ProductManagement({ view, onViewChange }: ProductManagementProps
         category: String(category?.category_name ?? "Uncategorized"),
         category_id: String(row.category_id ?? ""),
         color: String(row.color ?? "Default"),
-        gender: String(row.gender ?? "N/A"),
+        gender: normalizeProductDepartment(row.gender),
         size: String(row.size ?? "N/A"),
         unit_price: unitPrice,
         inventory_id: inventory?.inventory_id ? String(inventory.inventory_id) : "",
@@ -567,6 +568,9 @@ export function ProductManagement({ view, onViewChange }: ProductManagementProps
       return "Product name should include the model/style, not only the brand.";
     }
     if (!productForm.category_id) return "Category is required.";
+    if (!PRODUCT_DEPARTMENTS.includes(productForm.gender as (typeof PRODUCT_DEPARTMENTS)[number])) {
+      return "Select a valid department.";
+    }
     if (!productForm.size || !productForm.size.trim()) {
       return "Size is required.";
     }
@@ -2343,10 +2347,9 @@ function sameShoeKey(product: Pick<UiProduct, "name" | "brand" | "color" | "gend
   return [norm(product.name), norm(product.brand), color === "default" ? "" : color, gender === "n/a" ? "" : gender].join("::");
 }
 
-/** EU sizes offered when adding sizes: kids' range for Kids, adult range otherwise. */
-function sizeChoicesFor(department: string) {
-  const isKids = String(department ?? "").trim().toLowerCase() === "kids";
-  const [from, to] = isKids ? [24, 38] : [34, 48];
+/** EU sizes offered when adding another variant. */
+function sizeChoicesFor(_department: string) {
+  const [from, to] = [34, 48];
   return Array.from({ length: to - from + 1 }, (_, i) => String(from + i));
 }
 
@@ -2701,10 +2704,9 @@ function ProductMasterForm({
               <SelectValue placeholder="Select department" />
             </SelectTrigger>
             <SelectContent className="bg-[#181824] border-[#2d2d3a] text-yellow-100">
-              <SelectItem value="Men">Men</SelectItem>
-              <SelectItem value="Women">Women</SelectItem>
-              <SelectItem value="Kids">Kids</SelectItem>
-              <SelectItem value="Unisex">Unisex</SelectItem>
+              {PRODUCT_DEPARTMENTS.map((department) => (
+                <SelectItem key={department} value={department}>{department}</SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>

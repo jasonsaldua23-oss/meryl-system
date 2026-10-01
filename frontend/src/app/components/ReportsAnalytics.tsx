@@ -13,6 +13,7 @@ import { shortId } from './ui/utils';
 import { localDateKey as localDayKey, parseDbTimestamp } from '../../lib/datetime';
 import { useAuth } from '../../lib/auth-context';
 import { loadReportLogo, REPORT_STORE } from '../../lib/report-branding';
+import { normalizeProductDepartment } from '../../lib/product-department';
 import type { Font as ExcelFont } from 'exceljs';
 
 function isCompletedSale(sale: any) {
@@ -202,7 +203,6 @@ function getDepartmentColor(deptName: string): string {
   if (lower.includes('women') || lower === "women's" || lower === 'female') return '#ef4444'; // Red
   if (lower.includes('men') || lower === "men's" || lower === 'male') return '#3b82f6'; // Blue
   if (lower.includes('unisex')) return '#a855f7'; // Vibrant Purple (perfect blend of Blue & Red)
-  if (lower.includes('kid') || lower.includes('child') || lower.includes('youth') || lower.includes('infant')) return '#f59e0b'; // Amber Gold
   return '#10b981'; // Emerald
 }
 
@@ -858,8 +858,7 @@ export function ReportsAnalytics() {
         byCategory.set(categoryName, prevCat);
 
         // 6. Gender
-        const rawGender = String(product?.gender ?? '').trim();
-        const genderLabel = !rawGender || rawGender.toLowerCase() === 'n/a' ? 'Unisex' : rawGender;
+        const genderLabel = normalizeProductDepartment(product?.gender);
         const prevGender = byGender.get(genderLabel) ?? { key: genderLabel, name: genderLabel, subtitle: 'Department', sales: 0, revenue: 0 };
         prevGender.sales += qty;
         prevGender.revenue += revenue;
@@ -987,7 +986,7 @@ export function ReportsAnalytics() {
     const sampleProduct = matchingProducts[0];
     const brand = String(sampleProduct?.brand ?? 'Meryl Shoes').trim();
     const category = String(sampleProduct?.category?.[0]?.category_name ?? sampleProduct?.category?.category_name ?? 'Footwear').trim();
-    const department = String(sampleProduct?.gender ?? 'Unisex').trim();
+    const department = normalizeProductDepartment(sampleProduct?.gender);
     // Selling price lives on the inventory row (srp), not on product.
     const sampleInventory = Array.isArray(sampleProduct?.inventory) ? sampleProduct.inventory[0] : sampleProduct?.inventory;
     const basePrice = Number(sampleInventory?.srp ?? sampleProduct?.price ?? sampleProduct?.cost_price ?? 0);
@@ -1145,8 +1144,7 @@ export function ReportsAnalytics() {
         const brand = String(prod?.brand ?? 'Meryl Shoes').trim();
         const prodName = String(prod?.product_name ?? detail.product_name ?? 'Unknown Shoe').trim();
         const cat = String(prod?.category?.[0]?.category_name ?? prod?.category?.category_name ?? 'Footwear').trim();
-        const rawGender = String(prod?.gender ?? '').trim();
-        const dept = !rawGender || rawGender.toLowerCase() === 'n/a' ? 'Unisex' : rawGender;
+        const dept = normalizeProductDepartment(prod?.gender);
         const sizeStr = String(prod?.size ?? detail.size ?? 'Standard').trim();
 
         const qty = Number(detail.quantity ?? 0);
@@ -1304,8 +1302,7 @@ export function ReportsAnalytics() {
       const details = Array.isArray(sale.sales_details) ? sale.sales_details : [];
       details.forEach((detail: any) => {
         const prod = productLookup.get(String(detail.product_id ?? '')) ?? detail.product;
-        const rawGender = String(prod?.gender ?? '').trim();
-        const dept = !rawGender || rawGender.toLowerCase() === 'n/a' ? 'Unisex' : rawGender;
+        const dept = normalizeProductDepartment(prod?.gender);
         const brand = String(prod?.brand ?? 'Meryl Shoes').trim();
         const prodName = String(prod?.product_name ?? detail.product_name ?? 'Unknown Shoe').trim();
         const qty = Number(detail.quantity ?? 0);
@@ -1629,7 +1626,7 @@ export function ReportsAnalytics() {
 
       const categoryObj = Array.isArray(product.category) ? product.category[0] : product.category;
       const category = String(categoryObj?.category_name ?? product.category_name ?? product.category ?? 'Footwear').trim();
-      const department = String(product.gender ?? product.department ?? 'Unisex').trim();
+      const department = normalizeProductDepartment(product.gender ?? product.department);
       const size = String(product.size ?? 'N/A').trim();
       const color = String(product.color ?? 'N/A').trim();
       const rawSku = String(product.sku ?? product.product_id ?? '').trim();
@@ -4520,7 +4517,7 @@ export function ReportsAnalytics() {
                     Department Performance Report
                   </CardTitle>
                   <p className="mt-1 text-xs text-zinc-400">
-                    Men&apos;s, Women&apos;s, Unisex, and Kids footwear department analytics • {selectedRangeLabel}
+                    Men&apos;s, Women&apos;s, and Unisex footwear department analytics • {selectedRangeLabel}
                   </p>
                 </div>
                 <div className="flex items-center gap-2.5">
@@ -4534,7 +4531,6 @@ export function ReportsAnalytics() {
                       <SelectItem value="Men" className="text-xs">Men</SelectItem>
                       <SelectItem value="Women" className="text-xs">Women</SelectItem>
                       <SelectItem value="Unisex" className="text-xs">Unisex</SelectItem>
-                      <SelectItem value="Kids" className="text-xs">Kids</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

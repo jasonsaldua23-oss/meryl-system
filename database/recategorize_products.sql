@@ -3,7 +3,7 @@
 -- Run in the Supabase SQL Editor. Safe to run more than once.
 --
 -- Puts every product in the category it is sold as in the market, fixes brands,
--- fills in missing departments (Men / Women / Kids / Unisex), and removes the
+-- fills in missing departments (Men / Women / Unisex), and removes the
 -- "Sport Shoes" category plus the "Kid", "Men", "Women" rows that were created
 -- as categories (those are departments, stored on product.gender).
 --
@@ -81,13 +81,8 @@ where p.product_id = r.product_id
   and p.category_id is distinct from c.category_id;
 
 -- 4. Department (product.gender) ------------------------------------------------
--- Kids: EU size 34 and below. Signature basketball: Men. Women's brands and
--- dress flats: Women. Anything else still empty: Unisex.
-update public.product
-set gender = 'Kids', updated_at = now()
-where coalesce(nullif(regexp_replace(coalesce(size, ''), '[^0-9.]', '', 'g'), '')::numeric, 99) <= 34
-  and coalesce(gender, '') <> 'Kids';
-
+-- Signature basketball: Men. Women's brands and dress flats: Women.
+-- Anything else still empty: Unisex.
 update public.product
 set gender = case
     when lower(product_name) ~ '(lebron|kobe|jordan)' then 'Men'
@@ -96,12 +91,12 @@ set gender = case
   end,
   updated_at = now()
 where (gender is null or trim(gender) = '' or lower(gender) in ('n/a', 'na', 'none', 'default', 'unknown'))
-  and coalesce(nullif(regexp_replace(coalesce(size, ''), '[^0-9.]', '', 'g'), '')::numeric, 99) > 34;
+;
 
 -- Tidy spelling of existing departments.
 update public.product set gender = initcap(lower(trim(gender)))
-where gender is not null and lower(trim(gender)) in ('men', 'women', 'kids', 'unisex') and gender <> initcap(lower(trim(gender)));
-update public.product set gender = 'Kids' where lower(trim(gender)) in ('kid', 'children', 'child', 'boys', 'girls');
+where gender is not null and lower(trim(gender)) in ('men', 'women', 'unisex') and gender <> initcap(lower(trim(gender)));
+update public.product set gender = 'Unisex' where lower(trim(gender)) in ('kid', 'kids', 'children', 'child', 'boys', 'girls');
 update public.product set gender = 'Men' where lower(trim(gender)) in ('male', 'man', 'mens', 'men''s');
 update public.product set gender = 'Women' where lower(trim(gender)) in ('female', 'woman', 'womens', 'women''s', 'ladies');
 
