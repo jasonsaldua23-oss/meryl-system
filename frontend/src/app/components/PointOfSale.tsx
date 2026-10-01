@@ -390,6 +390,8 @@ export function PointOfSale() {
         email: c.email ?? "",
         contact_number: c.contact_number ?? "",
         date_registered: c.date_registered ?? "",
+        gender: c.gender ?? "",
+        age: c.age,
       })),
     ],
     [customers],
@@ -1147,37 +1149,51 @@ export function PointOfSale() {
     const { data: existing, error: selectError } = await supabase
       .from("customer")
       .select("customer_id,name,gender,age")
-      .eq("contact_number", phone)
-      .limit(1);
+      .eq("contact_number", phone);
     if (selectError) throw selectError;
 
-    if (existing && existing.length > 0) {
-      const existingGender = String((existing[0] as any).gender ?? "").trim();
-      const existingAgeRaw = Number((existing[0] as any).age ?? NaN);
+    // Only reuse an existing record if BOTH the mobile number AND customer name match (case-insensitive)
+    const matchingCustomer = (existing || []).find(
+      (c: any) => String(c.name || "").trim().toLowerCase() === name.toLowerCase(),
+    );
+
+    if (matchingCustomer) {
+      const existingGender = String((matchingCustomer as any).gender ?? "").trim();
+      const existingAgeRaw = Number((matchingCustomer as any).age ?? NaN);
       const existingAge = Number.isFinite(existingAgeRaw) ? existingAgeRaw : null;
-      if (!existingGender || existingAge === null) {
-        throw new Error("This customer exists but is missing gender/age. Please update profile in Customers first.");
+
+      const parsedAgeRaw = walkInAge && walkInAge.trim() ? Number(walkInAge) : null;
+      const validAge = parsedAgeRaw !== null && Number.isFinite(parsedAgeRaw) && parsedAgeRaw >= 0 && parsedAgeRaw <= 120 ? parsedAgeRaw : null;
+      const validGender = walkInGender && walkInGender !== "Select gender" ? walkInGender : null;
+
+      // If returning customer lacked demographics and cashier provided them now, update profile
+      if ((!existingGender && validGender) || (existingAge === null && validAge !== null)) {
+        await supabase
+          .from("customer")
+          .update({
+            gender: validGender ?? (existingGender || null),
+            age: validAge ?? existingAge,
+          })
+          .eq("customer_id", matchingCustomer.customer_id);
       }
-      return { customer_id: existing[0].customer_id as string, label: (existing[0].name as string) || name };
+
+      return { customer_id: matchingCustomer.customer_id as string, label: (matchingCustomer.name as string) || name };
     }
 
-    if (!walkInGender) {
-      throw new Error("Please provide gender for walk-in customer");
-    }
-    const parsedAge = Number(walkInAge);
-    if (!Number.isFinite(parsedAge) || parsedAge < 0 || parsedAge > 120) {
-      throw new Error("Please provide a valid age (0-120) for walk-in customer");
-    }
+    // Name does NOT match any customer with this phone number: this is a NEW customer.
+    const parsedAgeRaw = walkInAge && walkInAge.trim() ? Number(walkInAge) : null;
+    const validAge = parsedAgeRaw !== null && Number.isFinite(parsedAgeRaw) && parsedAgeRaw >= 0 && parsedAgeRaw <= 120 ? parsedAgeRaw : null;
+    const validGender = walkInGender && walkInGender !== "Select gender" ? walkInGender : null;
 
-    const fallbackEmail = `${phone.replace(/[^\d]/g, "") || Date.now()}@walkin.local`;
+    const fallbackEmail = `${phone.replace(/[^\d]/g, "")}_${Date.now()}@walkin.local`;
     const { data: created, error: insertError } = await supabase
       .from("customer")
       .insert({
         name,
         contact_number: phone,
         email: fallbackEmail,
-        gender: walkInGender,
-        age: parsedAge,
+        gender: validGender,
+        age: validAge,
         status: "active",
         date_registered: new Date().toISOString().slice(0, 10),
       })
@@ -1244,7 +1260,7 @@ export function PointOfSale() {
       const selectedAgeRaw = Number((selectedCustomer as any)?.age ?? NaN);
       const selectedAge = Number.isFinite(selectedAgeRaw) ? selectedAgeRaw : null;
       if (!selectedGender || selectedAge === null) {
-        return toast.error("Selected customer is missing gender/age. Update profile in Customers first.");
+        console.warn("Selected customer has incomplete demographics profile (missing gender/age)");
       }
     }
 
@@ -1372,6 +1388,7 @@ function formatReceiptNumber(salesId?: string) {
     await queryClient.invalidateQueries({ queryKey: ["products"] });
     await queryClient.invalidateQueries({ queryKey: ["inventory"] });
     await queryClient.invalidateQueries({ queryKey: ["inventoryLog"] });
+    await queryClient.invalidateQueries({ queryKey: ["customers"] });
     await queryClient.invalidateQueries({ queryKey: ["sales"] });
     toast.success("Payment processed successfully!");
   };

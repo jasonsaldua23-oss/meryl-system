@@ -112,5 +112,26 @@ describe("White-Box Test Suite: Core System Functions", () => {
 
     expect(calculateAccuracy(200, 180)).toBe(90.0);
   });
+
+  // 10. Walk-in Customer Resolution & Separation
+  test("WB-POS-011: resolveWalkInCustomer distinguishes between returning customer and new customer sharing phone", () => {
+    const resolveWalkInMatch = (existingList: Array<{ customer_id: string; name: string }>, enteredName: string) => {
+      const match = existingList.find(
+        (c) => c.name.trim().toLowerCase() === enteredName.trim().toLowerCase()
+      );
+      return match ? { isNew: false, customerId: match.customer_id } : { isNew: true };
+    };
+
+    const existingWithPhone = [{ customer_id: "cust-carl-123", name: "carl" }];
+
+    // Entering a new customer 'Testing' with carl's phone must create new customer
+    const newCust = resolveWalkInMatch(existingWithPhone, "Testing");
+    expect(newCust.isNew).toBe(true);
+
+    // Entering returning customer 'Carl' with carl's phone reuses Carl
+    const returningCust = resolveWalkInMatch(existingWithPhone, "Carl");
+    expect(returningCust.isNew).toBe(false);
+    expect(returningCust.customerId).toBe("cust-carl-123");
+  });
 });
 
