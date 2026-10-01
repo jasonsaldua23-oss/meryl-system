@@ -175,7 +175,7 @@ def rebuild_product_analytics_snapshots(
         for product_id, product in product_by_id.items():
             inv = inventory_by_product.get(product_id, {})
             stock_quantity = _safe_int(inv.get("stock_quantity"), 0)
-            reorder_level = _safe_int(inv.get("reorder_level"), _safe_int(product.get("reorder_level"), 5))
+            reorder_level = _safe_int(inv.get("reorder_level"), _safe_int(product.get("reorder_level"), 0))
             srp = _safe_float(inv.get("srp"), 0)
             unit_price = srp if srp > 0 else _safe_float(product.get("cost_price"), 0)
 
@@ -235,7 +235,7 @@ def rebuild_product_analytics_snapshots(
                         "computed_at": now.isoformat(),
                     }
                 )
-            if stock_quantity <= reorder_level:
+            if reorder_level > 0 and stock_quantity <= reorder_level:
                 all_recommendation_rows.append(
                     {
                         "product_id": product_id,

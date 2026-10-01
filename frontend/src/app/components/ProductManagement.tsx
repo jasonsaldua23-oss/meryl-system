@@ -86,7 +86,7 @@ const defaultStockForm: StockFormData = {
   stock_in: 0,
   reserved_quantity: 0,
   markup_rate: 0.9,
-  reorder_level: 10,
+  reorder_level: 0,
   status: "Active",
   manufacturer_date: "",
   expiration_date: "",
@@ -120,7 +120,7 @@ function getProductStatusMeta(product?: UiProduct) {
   if (product.status !== "Active") return { label: "Inactive", className: "border-slate-500/30 bg-slate-500/15 text-slate-200" };
   if (isExpiredProduct(product)) return { label: "Expired", className: "border-red-500/40 bg-red-500/15 text-red-200" };
   if (Number(product.available_stock || 0) <= 0) return { label: "Out of Stock", className: "border-red-500/40 bg-red-500/15 text-red-200" };
-  if (Number(product.available_stock || 0) <= Number(product.reorder_level || 0)) return { label: "Low Stock", className: "border-yellow-400/40 bg-yellow-400/15 text-yellow-100" };
+  if (Number(product.reorder_level ?? 0) > 0 && Number(product.available_stock || 0) <= Number(product.reorder_level ?? 0)) return { label: "Low Stock", className: "border-yellow-400/40 bg-yellow-400/15 text-yellow-100" };
   return { label: "Active", className: "border-emerald-500/40 bg-emerald-500/15 text-emerald-200" };
 }
 
@@ -304,7 +304,7 @@ export function ProductManagement({ view, onViewChange }: ProductManagementProps
       const brand = String(row.brand ?? "N/A");
       const unitPrice = Number(row.unit_price ?? row.cost_price ?? 0);
       const srp = Number(inventory?.srp ?? row.price ?? row.cost_price ?? unitPrice);
-      const reorder = Number(inventory?.reorder_level ?? row.reorder_level ?? 10);
+      const reorder = Number(inventory?.reorder_level ?? row.reorder_level ?? 0);
       const stock = Number(inventory?.stock_quantity ?? 0);
       const reserved = Math.min(Math.max(Number(inventory?.reserved_quantity ?? 0), 0), Math.max(stock, 0));
       const status = toUiStatus(inventory?.inventory_status ?? row.status);
@@ -525,6 +525,7 @@ export function ProductManagement({ view, onViewChange }: ProductManagementProps
       gender,
       size,
       image_url: product.image_url || null,
+      reorder_level: 0,
     }));
     try {
       setIsAddingSizes(true);
@@ -554,7 +555,7 @@ export function ProductManagement({ view, onViewChange }: ProductManagementProps
       stock_in: 0,
       reserved_quantity: product.reserved_stock || 0,
       markup_rate: defaultMarkupRateForProduct(product),
-      reorder_level: product.reorder_level || 10,
+      reorder_level: product.reorder_level ?? 0,
       status: product.status,
       manufacturer_date: product.manufacturer_date ? product.manufacturer_date.slice(0, 10) : "",
       expiration_date: product.expiration_date ? product.expiration_date.slice(0, 10) : "",
@@ -603,6 +604,7 @@ export function ProductManagement({ view, onViewChange }: ProductManagementProps
       color: productForm.color.trim() || null,
       gender: productForm.gender || null,
       image_url: trimmedImageUrl,
+      reorder_level: editingProduct ? Number(editingProduct.reorder_level ?? 0) : 0,
     };
 
     try {
@@ -1631,8 +1633,8 @@ function ProductSettingsPage({
   const inStockCount = products.filter((p) => Number(p.available_stock || 0) > 0 && String(p.status).toLowerCase() === "active").length;
   const lowStockCount = products.filter((p) => {
     const stock = Number(p.stock || 0);
-    const reorder = Number(p.reorder_level || 10);
-    return stock > 0 && stock <= reorder && String(p.status).toLowerCase() === "active";
+    const reorder = Number(p.reorder_level ?? 0);
+    return reorder > 0 && stock > 0 && stock <= reorder && String(p.status).toLowerCase() === "active";
   }).length;
   const outOfStockCount = products.filter((p) => Number(p.stock || 0) <= 0 || String(p.status).toLowerCase() === "inactive").length;
 
@@ -1664,13 +1666,13 @@ function ProductSettingsPage({
 
       // Stock status filter
       const stock = Number(p.stock || 0);
-      const reorder = Number(p.reorder_level || 10);
+      const reorder = Number(p.reorder_level ?? 0);
       const isInactive = String(p.status).toLowerCase() === "inactive";
       let matchesStock = true;
       if (selectedStockFilter === "in_stock") {
         matchesStock = Number(p.available_stock || 0) > 0 && !isInactive;
       } else if (selectedStockFilter === "low_stock") {
-        matchesStock = stock > 0 && stock <= reorder && !isInactive;
+        matchesStock = reorder > 0 && stock > 0 && stock <= reorder && !isInactive;
       } else if (selectedStockFilter === "out_of_stock") {
         matchesStock = stock <= 0 && !isInactive;
       } else if (selectedStockFilter === "inactive") {
@@ -1701,7 +1703,7 @@ function ProductSettingsPage({
       stock_in: 0,
       reserved_quantity: product.reserved_stock || 0,
       markup_rate: defaultMarkupRateForProduct(product),
-      reorder_level: product.reorder_level || 10,
+      reorder_level: product.reorder_level ?? 0,
       status: (product.status as InventoryStatus) || "Active",
       manufacturer_date: product.manufacturer_date ? product.manufacturer_date.slice(0, 10) : "",
       expiration_date: product.expiration_date ? product.expiration_date.slice(0, 10) : "",
@@ -1886,7 +1888,7 @@ function ProductSettingsPage({
                 {paginatedProducts.length > 0 ? (
                   paginatedProducts.map((product) => {
                     const statusMeta = getProductStatusMeta(product);
-                    const isLow = Number(product.stock || 0) > 0 && Number(product.stock || 0) <= Number(product.reorder_level || 10);
+                    const isLow = Number(product.reorder_level ?? 0) > 0 && Number(product.stock || 0) > 0 && Number(product.stock || 0) <= Number(product.reorder_level ?? 0);
                     const isOut = Number(product.stock || 0) <= 0;
                     const isInactive = String(product.status).toLowerCase() === "inactive";
 

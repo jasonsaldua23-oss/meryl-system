@@ -116,11 +116,11 @@ export function Dashboard() {
     const stockList = products.map((p) => {
       const inventory = Array.isArray(p.inventory) ? p.inventory[0] : p.inventory;
       const stock = Number(inventory?.stock_quantity ?? 0);
-      const reorder = Number(p.reorder_level ?? inventory?.reorder_level ?? 10);
+      const reorder = Number(p.reorder_level ?? inventory?.reorder_level ?? 0);
       return { stock, reorder };
     });
     const stockTotal = stockList.reduce((sum, row) => sum + row.stock, 0);
-    const lowStock = stockList.filter((row) => row.stock > 0 && row.stock <= row.reorder).length;
+    const lowStock = stockList.filter((row) => row.reorder > 0 && row.stock > 0 && row.stock <= row.reorder).length;
 
     const customerNewCount = customers.filter((c) => {
       const rawDate = c.created_at ?? c.date_registered ?? null;

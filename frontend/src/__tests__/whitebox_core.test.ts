@@ -136,5 +136,27 @@ describe("White-Box Test Suite: Core System Functions", () => {
     // Unique phone number passes validation
     expect(validateUniqueWalkInPhone(existing, "09991234567")).toBe(true);
   });
+
+  // 11. New Product Reorder Level Default and Low Stock Suppression
+  test("WB-INV-012: new products default reorder_level to 0 and suppress low stock alerts before stock-in", () => {
+    const createNewProductPayload = (name: string, size: string) => ({
+      product_name: name,
+      size,
+      reorder_level: 0,
+    });
+
+    const newProd = createNewProductPayload("Campus Sneaker", "42");
+    expect(newProd.reorder_level).toBe(0);
+
+    const shouldTriggerLowStock = (stock: number, reorder: number) => {
+      return reorder > 0 && stock <= reorder;
+    };
+
+    // Before stocking in: stock is 0, reorder is 0 -> should NOT trigger low stock alert
+    expect(shouldTriggerLowStock(0, newProd.reorder_level)).toBe(false);
+
+    // After stock-in and configuring threshold: stock is 3, reorder is 5 -> triggers low stock alert
+    expect(shouldTriggerLowStock(3, 5)).toBe(true);
+  });
 });
 

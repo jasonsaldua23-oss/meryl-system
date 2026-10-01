@@ -202,15 +202,15 @@ export function NotificationCenter() {
           productId: String(p.product_id ?? p.id ?? p.sku ?? p.product_name ?? "product"),
           label: stockVariantLabel(p),
           stock: Number(inventory?.stock_quantity ?? 0),
-          reorder: Number(p.reorder_level ?? inventory?.reorder_level ?? 10),
+          reorder: Number(p.reorder_level ?? inventory?.reorder_level ?? 0),
           status: String(p.status ?? "active").toLowerCase(),
           eventDate: latestDate(inventory?.last_updated, inventory?.updated_at, p.updated_at, p.created_at) ?? now,
         };
       })
-      .filter((x) => (x.status === "active" || x.status === "available") && x.stock <= x.reorder);
+      .filter((x) => (x.status === "active" || x.status === "available") && x.reorder > 0 && x.stock <= x.reorder);
 
     lowStock
-      .filter((x) => x.stock <= Math.max(2, Math.floor(x.reorder * 0.4)))
+      .filter((x) => x.reorder > 0 && x.stock <= Math.max(2, Math.floor(x.reorder * 0.4)))
       .sort((a, b) => a.stock - b.stock || b.eventDate.getTime() - a.eventDate.getTime())
       .slice(0, 5)
       .forEach((x) => {

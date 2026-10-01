@@ -27,7 +27,7 @@ def get_inventory_row(product_id, *, safe_int, table_exists, supabase):
 def upsert_inventory_record(
     product_id,
     stock_quantity,
-    reorder_level=10,
+    reorder_level=0,
     reference_id=None,
     *,
     safe_int,
@@ -42,7 +42,7 @@ def upsert_inventory_record(
     payload = {
         "product_id": product_id,
         "stock_quantity": max(0, safe_int(stock_quantity, 0)),
-        "reorder_level": max(0, safe_int(reorder_level, 10)),
+        "reorder_level": max(0, safe_int(reorder_level, 0)),
         "reference_id": reference_id,
         "last_updated": datetime.now().isoformat(),
     }
@@ -276,7 +276,7 @@ def build_product_lookup(*, normalize_inventory_products, fetch_rows):
 
 
 def get_reorder_level(product, *, safe_int):
-    return max(5, safe_int(product.get("reorder_level"), 10))
+    return max(0, safe_int(product.get("reorder_level"), 0))
 
 
 def build_inventory_form_data(form, *, safe_int, safe_float, db_product_status):
@@ -298,7 +298,7 @@ def build_inventory_form_data(form, *, safe_int, safe_float, db_product_status):
         "color": (form.get("color") or "Default").strip() or "Default",
         "gender": form.get("gender", "").strip() or "",
         "cost_price": safe_float(form.get("cost_price"), 0),
-        "reorder_level": max(0, safe_int(form.get("reorder_level"), 10)),
+        "reorder_level": max(0, safe_int(form.get("reorder_level"), 0)),
         "status": db_product_status(availability_status),
     }
 

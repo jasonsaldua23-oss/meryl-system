@@ -504,7 +504,7 @@ export function PromotionManagement() {
         const inv = Array.isArray(p.inventory) ? p.inventory[0] : p.inventory;
         const productId = String(p.product_id ?? '');
         const stock = Number(inv?.stock_quantity ?? 0);
-        const reorderLevel = Number(p.reorder_level ?? inv?.reorder_level ?? 10);
+        const reorderLevel = Number(p.reorder_level ?? inv?.reorder_level ?? 0);
         const sold30 = soldByProduct.get(productId) ?? 0;
         return {
           id: productId,
@@ -515,7 +515,7 @@ export function PromotionManagement() {
           stock,
           reorderLevel,
           sold30,
-          isSlowMover: stock >= reorderLevel * 2 && sold30 <= 2,
+          isSlowMover: reorderLevel > 0 && stock >= reorderLevel * 2 && sold30 <= 2,
         };
       })
       .filter((p) => p.id && p.name && p.srp > 0 && p.unitCost > 0);
@@ -770,7 +770,7 @@ export function PromotionManagement() {
     const rows = products.map((p: any) => {
       const inventory = Array.isArray(p.inventory) ? p.inventory[0] : p.inventory;
       const stock = Number(inventory?.stock_quantity ?? 0);
-      const reorder = Number(inventory?.reorder_level ?? p.reorder_level ?? 10);
+      const reorder = Number(inventory?.reorder_level ?? p.reorder_level ?? 0);
       const sold30 = soldByProduct.get(String(p.product_id ?? '')) ?? 0;
       const velocity = sold30 / 30;
       const srp = Number(inventory?.srp ?? p.srp ?? p.selling_price ?? p.price ?? 0);
@@ -788,7 +788,7 @@ export function PromotionManagement() {
         reorder,
         sold30,
         velocity,
-        isSlowMover: stock >= reorder * 2 && sold30 <= 2,
+        isSlowMover: reorder > 0 && stock >= reorder * 2 && sold30 <= 2,
       };
     });
 

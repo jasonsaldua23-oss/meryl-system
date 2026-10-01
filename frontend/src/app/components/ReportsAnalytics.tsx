@@ -1609,7 +1609,7 @@ export function ReportsAnalytics() {
       const onHand = Number(inventory?.stock_quantity ?? product.stock ?? 0);
       const reserved = Number(inventory?.reserved_quantity ?? inventory?.held_stock ?? product.reserved_stock ?? 0);
       const stock = Math.max(0, onHand - reserved);
-      const reorder = Number(inventory?.reorder_level ?? product.reorder_level ?? 10);
+      const reorder = Number(inventory?.reorder_level ?? product.reorder_level ?? 0);
 
       // Price resolution: check inventory.srp, cost_price, unit_price, price
       const rawCostPrice = Number(product.cost_price ?? product.cost ?? 0);
@@ -1644,13 +1644,13 @@ export function ReportsAnalytics() {
       if (stock === 0) {
         status = 'Out of Stock';
         outOfStockCount++;
-      } else if (stock <= Math.max(2, Math.floor(reorder * 0.4))) {
+      } else if (reorder > 0 && stock <= Math.max(2, Math.floor(reorder * 0.4))) {
         status = 'Critical';
         criticalCount++;
-      } else if (stock <= reorder) {
+      } else if (reorder > 0 && stock <= reorder) {
         status = 'Reorder Required';
         reorderCount++;
-      } else if (stock >= reorder * 3) {
+      } else if (reorder > 0 && stock >= reorder * 3) {
         status = 'Overstock';
         overstockCount++;
       } else {

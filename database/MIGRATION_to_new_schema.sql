@@ -86,7 +86,7 @@ CREATE TABLE IF NOT EXISTS product (
   size VARCHAR(10),
   color VARCHAR(50),
   cost_price DECIMAL(10, 2) NOT NULL,
-  reorder_level INT DEFAULT 5,
+  reorder_level INT DEFAULT 0,
   status VARCHAR(20) CHECK (status IN ('active', 'inactive')) DEFAULT 'active',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -97,7 +97,7 @@ CREATE TABLE IF NOT EXISTS inventory (
   inventory_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   product_id UUID NOT NULL UNIQUE REFERENCES product(product_id) ON DELETE CASCADE,
   stock_quantity INT NOT NULL DEFAULT 0,
-  reorder_level INT DEFAULT 5,
+  reorder_level INT DEFAULT 0,
   srp DECIMAL(10, 2) DEFAULT 0,
   inventory_status VARCHAR(20) DEFAULT 'inactive' CHECK (inventory_status IN ('active', 'inactive')),
   last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP

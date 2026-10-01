@@ -344,7 +344,7 @@ def get_inventory_row(product_id):
     )
 
 
-def upsert_inventory_record(product_id, stock_quantity, reorder_level=10, reference_id=None):
+def upsert_inventory_record(product_id, stock_quantity, reorder_level=0, reference_id=None):
     return inventory_upsert_record(
         product_id,
         stock_quantity,
