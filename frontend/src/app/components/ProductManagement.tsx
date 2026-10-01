@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogT
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
 import { Badge } from "./ui/badge";
-import { Edit, Eye, Info, Package, Plus, Search, Settings, Warehouse, SlidersHorizontal, ArrowUpDown, CheckCircle2, AlertTriangle, Layers, TrendingUp, Calendar, DollarSign, X, Check, Filter, Upload } from "lucide-react";
+import { Edit, Eye, Info, Package, Plus, Search, Settings, Warehouse, SlidersHorizontal, ArrowUpDown, CheckCircle2, AlertTriangle, Layers, TrendingUp, DollarSign, X, Check, Filter, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { useCategories, useInventory, useProducts, useProductsMutations } from "../../lib/hooks";
 import { supabase } from "../../lib/supabase";
@@ -676,10 +676,6 @@ export function ProductManagement({ view, onViewChange }: ProductManagementProps
       return toast.error("Select a markup greater than 0 to calculate SRP.");
     }
     if (Number(stockForm.reorder_level) < 0) return toast.error("Reorder level must be greater than or equal to 0.");
-    if (stockForm.manufacturer_date && stockForm.expiration_date && stockForm.expiration_date < stockForm.manufacturer_date) {
-      return toast.error("Expiration date must not be earlier than manufacturer date.");
-    }
-
     const nextStock = Number(product.stock || 0) + Number(stockForm.stock_in || 0);
     const requestedReserved = Math.max(Number(stockForm.reserved_quantity || 0), 0);
     if (requestedReserved > nextStock) {
@@ -2208,39 +2204,6 @@ function ProductSettingsPage({
                       <span className="text-lg font-black text-yellow-300">
                         {formatMoney(computedSrp)}
                       </span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* DATES & BATCH TRACKING */}
-                <div className="rounded-xl border border-[#272738] bg-[#161622] p-4">
-                  <div className="flex items-center gap-2 mb-3">
-                    <Calendar className="w-4 h-4 text-yellow-400" />
-                    <span className="text-xs font-bold text-white">Batch & Quality Dates</span>
-                    <span className="text-xs text-yellow-200/60">(Optional)</span>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className="space-y-1.5">
-                      <Label className="text-xs text-yellow-200/80 font-medium">
-                        Manufactured Date
-                      </Label>
-                      <Input
-                        type="date"
-                        value={stockForm.manufacturer_date || ""}
-                        onChange={(e) => setStockForm({ ...stockForm, manufacturer_date: e.target.value })}
-                        className="h-10 bg-[#1f1f2e] border-[#303044] text-yellow-100 text-xs rounded-lg [color-scheme:dark]"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs text-yellow-200/80 font-medium">
-                        Expiration Date
-                      </Label>
-                      <Input
-                        type="date"
-                        value={stockForm.expiration_date || ""}
-                        onChange={(e) => setStockForm({ ...stockForm, expiration_date: e.target.value })}
-                        className="h-10 bg-[#1f1f2e] border-[#303044] text-yellow-100 text-xs rounded-lg [color-scheme:dark]"
-                      />
                     </div>
                   </div>
                 </div>
