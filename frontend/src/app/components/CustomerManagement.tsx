@@ -474,13 +474,13 @@ function CustomerForm({
           className="bg-red-600 border-red-800 text-yellow-200"
         />
       </div>
-      <label htmlFor="promoEmails" className="flex items-start gap-3 rounded-lg border border-red-800 bg-red-600/40 p-3 cursor-pointer">
+      <label htmlFor="promoEmails" className="flex items-start gap-3 rounded-lg border border-[#282838] bg-[#14141e] p-3 cursor-pointer hover:border-[#38384e] transition-colors">
         <input
           id="promoEmails"
           type="checkbox"
           checked={formData.promoEmails}
           onChange={(e) => setFormData({ ...formData, promoEmails: e.target.checked })}
-          className="mt-1 h-4 w-4 accent-yellow-400"
+          className="mt-1 h-4 w-4 accent-yellow-400 cursor-pointer"
         />
         <span>
           <span className="block text-sm font-semibold text-yellow-300">Send promotion emails</span>
