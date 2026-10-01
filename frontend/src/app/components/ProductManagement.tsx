@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogT
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
 import { Badge } from "./ui/badge";
-import { Edit, Eye, Info, Package, Plus, Search, Settings, Warehouse, SlidersHorizontal, ArrowUpDown, CheckCircle2, AlertTriangle, Layers, TrendingUp, DollarSign, X, Check, Filter, Upload } from "lucide-react";
+import { Archive, Edit, Eye, Info, Package, Plus, Search, Settings, Warehouse, SlidersHorizontal, ArrowUpDown, CheckCircle2, AlertTriangle, Layers, TrendingUp, DollarSign, X, Check, Filter, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { useCategories, useInventory, useProducts, useProductsMutations } from "../../lib/hooks";
 import { supabase } from "../../lib/supabase";
@@ -337,10 +337,15 @@ export function ProductManagement({ view, onViewChange }: ProductManagementProps
   }, [inventoryByProductId, productsQuery.data]);
 
   const productMap = useMemo(() => new Map(products.map((product) => [product.product_id, product])), [products]);
+  const archivedProductCount = useMemo(
+    () => products.filter((product) => product.isArchived).length,
+    [products],
+  );
 
   const baseProducts = useMemo(() => {
     const sourceRaw = activeTab === "inventory" ? products.filter((product) => product.hasInventory) : products;
-    return activeTab === "list" && !showArchived ? sourceRaw.filter((product) => !product.isArchived) : sourceRaw;
+    if (activeTab !== "list") return sourceRaw;
+    return sourceRaw.filter((product) => showArchived ? product.isArchived : !product.isArchived);
   }, [activeTab, products, showArchived]);
 
   const availableCategories = useMemo(() => {
@@ -440,7 +445,7 @@ export function ProductManagement({ view, onViewChange }: ProductManagementProps
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, selectedCategory, selectedBrand, selectedGender, selectedStockStatus, activeTab]);
+  }, [searchTerm, selectedCategory, selectedBrand, selectedGender, selectedStockStatus, activeTab, showArchived]);
 
   const totalProductPages = Math.max(1, Math.ceil(filteredProducts.length / pageSize));
   const safeProductPage = Math.min(Math.max(1, currentPage), totalProductPages);
@@ -971,7 +976,9 @@ export function ProductManagement({ view, onViewChange }: ProductManagementProps
             <div className="flex items-center justify-between gap-3">
               <CardTitle className="text-yellow-300 flex items-center gap-2">
                 {activeTab === "list" ? <Package className="w-5 h-5 text-yellow-400" /> : <Warehouse className="w-5 h-5 text-yellow-400" />}
-                {activeTab === "list" ? "Product List / Master Data" : "Sellable Inventory"}
+                {activeTab === "list"
+                  ? showArchived ? "Archived Products" : "Product List / Master Data"
+                  : "Sellable Inventory"}
               </CardTitle>
               <div className="flex items-center gap-2">
                 <Badge className="bg-yellow-400 text-black font-semibold">{filteredProducts.length} records</Badge>
@@ -979,10 +986,17 @@ export function ProductManagement({ view, onViewChange }: ProductManagementProps
                   <Button
                     type="button"
                     variant="ghost"
-                    onClick={() => setShowArchived((prev) => !prev)}
-                    className="border border-[#2d2d3a] text-yellow-200 hover:bg-[#252533]"
+                    onClick={() => {
+                      setShowArchived((prev) => !prev);
+                      setCurrentPage(1);
+                    }}
+                    aria-pressed={showArchived}
+                    className={showArchived
+                      ? "border border-yellow-400 bg-yellow-400 text-black hover:bg-yellow-300"
+                      : "border border-[#2d2d3a] text-yellow-200 hover:bg-[#252533]"}
                   >
-                    {showArchived ? "Hide Archived" : "Show Archived"}
+                    <Archive className="w-4 h-4 mr-2" />
+                    {showArchived ? "Show Active Products" : `Archived (${archivedProductCount})`}
                   </Button>
                 )}
                 {activeTab === "list" && isExternallyRouted && (
