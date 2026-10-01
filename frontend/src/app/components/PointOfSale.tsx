@@ -19,6 +19,7 @@ import { supabase } from "../../lib/supabase";
 import { cleanProductImageUrl } from "../../lib/image-utils";
 import { formatStoreDateTime, storeDateDigits, storeToday } from "../../lib/datetime";
 import { isPromotionLive, promotionTargetMatches } from "../../lib/promotion-rules";
+import { exactIlikePattern, findCustomerWithEmail, isValidCustomerEmail, normalizeCustomerEmail } from "../../lib/customer-validation";
 import merylLogoBw from "../../assets/Meryl_Logo_BW.svg";
 
 type CartItem = {
@@ -370,6 +371,7 @@ export function PointOfSale() {
   const [saveWalkInDetails, setSaveWalkInDetails] = useState(false);
   const [walkInCustomerName, setWalkInCustomerName] = useState("");
   const [walkInCustomerPhone, setWalkInCustomerPhone] = useState("");
+  const [walkInCustomerEmail, setWalkInCustomerEmail] = useState("");
   const [walkInGender, setWalkInGender] = useState("");
   const [walkInAge, setWalkInAge] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<string>("Cash");
@@ -410,6 +412,11 @@ export function PointOfSale() {
       ) ?? null
     );
   }, [customers, walkInCustomerPhone]);
+
+  const existingCustomerWithWalkInEmail = useMemo(
+    () => findCustomerWithEmail(customers, walkInCustomerEmail),
+    [customers, walkInCustomerEmail],
+  );
 
   const productInventory = useMemo(() => {
     const rows = (productsQuery.data as any[]) ?? [];
@@ -1151,23 +1158,34 @@ export function PointOfSale() {
   const getOrCreateWalkInCustomer = async () => {
     const name = walkInCustomerName.trim();
     const phone = normalizePhone(walkInCustomerPhone);
-    if (!name || !phone) {
-      throw new Error("Please provide walk-in customer name and mobile number");
+    const email = normalizeCustomerEmail(walkInCustomerEmail);
+    if (!name || !phone || !email) {
+      throw new Error("Please provide the customer name, mobile number, and email address");
     }
     if (phone.length !== 11) {
       throw new Error("Mobile number must be exactly 11 digits");
     }
+    if (!isValidCustomerEmail(email)) {
+      throw new Error("Please enter a valid customer email address");
+    }
 
-    const { data: existing, error: selectError } = await supabase
-      .from("customer")
-      .select("customer_id,name")
-      .eq("contact_number", phone);
-    if (selectError) throw selectError;
+    const [phoneLookup, emailLookup] = await Promise.all([
+      supabase.from("customer").select("customer_id,name,email").eq("contact_number", phone),
+      supabase.from("customer").select("customer_id,name,email").ilike("email", exactIlikePattern(email)),
+    ]);
+    if (phoneLookup.error) throw phoneLookup.error;
+    if (emailLookup.error) throw emailLookup.error;
 
-    if (existing && existing.length > 0) {
-      const existingName = existing[0].name || "an existing customer";
+    if (phoneLookup.data && phoneLookup.data.length > 0) {
+      const existingName = phoneLookup.data[0].name || "an existing customer";
       throw new Error(
         `Mobile number ${phone} is already registered to "${existingName}". Mobile numbers must be unique. Please use a different mobile number or select "${existingName}" from the customer list above.`,
+      );
+    }
+    if (emailLookup.data && emailLookup.data.length > 0) {
+      const existingName = emailLookup.data[0].name || "an existing customer";
+      throw new Error(
+        `Email ${email} is already registered to "${existingName}". Email addresses must be unique. Please use a different email or select "${existingName}" from the customer list above.`,
       );
     }
 
@@ -1176,13 +1194,12 @@ export function PointOfSale() {
     const validAge = parsedAgeRaw !== null && Number.isFinite(parsedAgeRaw) && parsedAgeRaw >= 0 && parsedAgeRaw <= 120 ? parsedAgeRaw : null;
     const validGender = walkInGender && walkInGender !== "Select gender" ? walkInGender : null;
 
-    const fallbackEmail = `${phone.replace(/[^\d]/g, "")}_${Date.now()}@walkin.local`;
     const { data: created, error: insertError } = await supabase
       .from("customer")
       .insert({
         name,
         contact_number: phone,
-        email: fallbackEmail,
+        email,
         gender: validGender,
         age: validAge,
         status: "active",
@@ -1190,7 +1207,12 @@ export function PointOfSale() {
       })
       .select("customer_id,name")
       .single();
-    if (insertError) throw insertError;
+    if (insertError) {
+      if (insertError.code === "23505" && String(insertError.message).toLowerCase().includes("email")) {
+        throw new Error(`Email ${email} is already registered. Email addresses must be unique.`);
+      }
+      throw insertError;
+    }
 
     return { customer_id: created.customer_id as string, label: (created.name as string) || name };
   };
@@ -1371,6 +1393,7 @@ function formatReceiptNumber(salesId?: string) {
     setSaveWalkInDetails(false);
     setWalkInCustomerName("");
     setWalkInCustomerPhone("");
+    setWalkInCustomerEmail("");
     setWalkInGender("");
     setWalkInAge("");
     setPaymentMethod("Cash");
@@ -2140,6 +2163,41 @@ function formatReceiptNumber(salesId?: string) {
                               "{existingCustomerWithWalkInPhone.name}"
                             </span>
                             . Mobile numbers must be unique.
+                          </p>
+                        )}
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs text-yellow-200/70">
+                          Email Address <span className="text-red-400">*</span>
+                        </Label>
+                        <Input
+                          type="email"
+                          value={walkInCustomerEmail}
+                          onChange={(e) => setWalkInCustomerEmail(e.target.value)}
+                          placeholder="e.g. customer@email.com"
+                          required
+                          className={`h-9 bg-[#1d1d2b] ${
+                            existingCustomerWithWalkInEmail
+                              ? "border-amber-500 focus-visible:ring-amber-500"
+                              : "border-[#303042]"
+                          } text-yellow-100 placeholder:text-yellow-300/40 rounded-lg text-xs`}
+                        />
+                        {existingCustomerWithWalkInEmail && (
+                          <p className="text-[11px] text-amber-400 font-medium pt-0.5 leading-snug">
+                            Already registered to{" "}
+                            <span
+                              className="text-yellow-300 font-semibold underline cursor-pointer hover:text-yellow-200"
+                              onClick={() =>
+                                selectCustomer({
+                                  value: existingCustomerWithWalkInEmail.name,
+                                  label: existingCustomerWithWalkInEmail.name,
+                                  customer_id: existingCustomerWithWalkInEmail.customer_id,
+                                })
+                              }
+                            >
+                              "{existingCustomerWithWalkInEmail.name}"
+                            </span>
+                            . Email addresses must be unique.
                           </p>
                         )}
                       </div>

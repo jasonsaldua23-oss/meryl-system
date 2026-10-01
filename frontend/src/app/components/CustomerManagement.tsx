@@ -11,6 +11,7 @@ import { Crown, Edit, Mail, MapPin, Phone, Search, Star, Trash2, Users } from "l
 import { toast } from "sonner";
 import { useCustomers, useCustomersMutations, useSales } from "../../lib/hooks";
 import { TablePagination } from "./ui/table-pagination";
+import { findCustomerWithEmail, isValidCustomerEmail, normalizeCustomerEmail } from "../../lib/customer-validation";
 
 type CustomerStatus = "Active" | "Inactive";
 
@@ -152,12 +153,19 @@ export function CustomerManagement() {
 
   const handleEditCustomer = async () => {
     if (!editingCustomerId) return;
+    const email = normalizeCustomerEmail(formData.email);
+    if (!email) return toast.error("Email address is required.");
+    if (!isValidCustomerEmail(email)) return toast.error("Please enter a valid email address.");
+    const duplicateEmail = findCustomerWithEmail(customers as any[], email, editingCustomerId);
+    if (duplicateEmail) {
+      return toast.error(`Email ${email} is already registered to "${duplicateEmail.name || "another customer"}".`);
+    }
     try {
       await customerMutations.updateMutation.mutateAsync({
         id: editingCustomerId,
         payload: {
           name: formData.name,
-          email: formData.email,
+          email,
           contact_number: formData.contact_number,
           address: formData.address || null,
           gender: formData.gender || null,
@@ -179,6 +187,9 @@ export function CustomerManagement() {
       setFormData(defaultForm);
       toast.success("Customer updated successfully!");
     } catch (error: any) {
+      if (error?.code === "23505" && String(error?.message ?? "").toLowerCase().includes("email")) {
+        return toast.error(`Email ${email} is already registered to another customer.`);
+      }
       toast.error(error?.message ?? "Failed to update customer");
     }
   };
