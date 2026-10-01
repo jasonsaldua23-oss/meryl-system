@@ -397,6 +397,16 @@ export function PointOfSale() {
     [customers],
   );
 
+  const existingCustomerWithWalkInPhone = useMemo(() => {
+    const phone = normalizePhone(walkInCustomerPhone);
+    if (phone.length !== 11) return null;
+    return (
+      customers.find(
+        (c: any) => normalizePhone(String(c?.contact_number ?? "")) === phone,
+      ) ?? null
+    );
+  }, [customers, walkInCustomerPhone]);
+
   const productInventory = useMemo(() => {
     const rows = (productsQuery.data as any[]) ?? [];
     const inventoryRows = (inventoryQuery.data as any[]) ?? [];
@@ -1148,36 +1158,15 @@ export function PointOfSale() {
 
     const { data: existing, error: selectError } = await supabase
       .from("customer")
-      .select("customer_id,name,gender,age")
+      .select("customer_id,name")
       .eq("contact_number", phone);
     if (selectError) throw selectError;
 
-    // Only reuse an existing record if BOTH the mobile number AND customer name match (case-insensitive)
-    const matchingCustomer = (existing || []).find(
-      (c: any) => String(c.name || "").trim().toLowerCase() === name.toLowerCase(),
-    );
-
-    if (matchingCustomer) {
-      const existingGender = String((matchingCustomer as any).gender ?? "").trim();
-      const existingAgeRaw = Number((matchingCustomer as any).age ?? NaN);
-      const existingAge = Number.isFinite(existingAgeRaw) ? existingAgeRaw : null;
-
-      const parsedAgeRaw = walkInAge && walkInAge.trim() ? Number(walkInAge) : null;
-      const validAge = parsedAgeRaw !== null && Number.isFinite(parsedAgeRaw) && parsedAgeRaw >= 0 && parsedAgeRaw <= 120 ? parsedAgeRaw : null;
-      const validGender = walkInGender && walkInGender !== "Select gender" ? walkInGender : null;
-
-      // If returning customer lacked demographics and cashier provided them now, update profile
-      if ((!existingGender && validGender) || (existingAge === null && validAge !== null)) {
-        await supabase
-          .from("customer")
-          .update({
-            gender: validGender ?? (existingGender || null),
-            age: validAge ?? existingAge,
-          })
-          .eq("customer_id", matchingCustomer.customer_id);
-      }
-
-      return { customer_id: matchingCustomer.customer_id as string, label: (matchingCustomer.name as string) || name };
+    if (existing && existing.length > 0) {
+      const existingName = existing[0].name || "an existing customer";
+      throw new Error(
+        `Mobile number ${phone} is already registered to "${existingName}". Mobile numbers must be unique. Please use a different mobile number or select "${existingName}" from the customer list above.`,
+      );
     }
 
     // Name does NOT match any customer with this phone number: this is a NEW customer.
@@ -2127,8 +2116,30 @@ function formatReceiptNumber(salesId?: string) {
                           placeholder="e.g. 09171234567"
                           inputMode="numeric"
                           maxLength={11}
-                          className="h-9 bg-[#1d1d2b] border-[#303042] text-yellow-100 placeholder:text-yellow-300/40 rounded-lg text-xs"
+                          className={`h-9 bg-[#1d1d2b] ${
+                            existingCustomerWithWalkInPhone
+                              ? "border-amber-500 focus-visible:ring-amber-500"
+                              : "border-[#303042]"
+                          } text-yellow-100 placeholder:text-yellow-300/40 rounded-lg text-xs`}
                         />
+                        {existingCustomerWithWalkInPhone && (
+                          <p className="text-[11px] text-amber-400 font-medium pt-0.5 leading-snug">
+                            ⚠️ Already registered to{" "}
+                            <span
+                              className="text-yellow-300 font-semibold underline cursor-pointer hover:text-yellow-200"
+                              onClick={() =>
+                                selectCustomer({
+                                  value: existingCustomerWithWalkInPhone.name,
+                                  label: existingCustomerWithWalkInPhone.name,
+                                  customer_id: existingCustomerWithWalkInPhone.customer_id,
+                                })
+                              }
+                            >
+                              "{existingCustomerWithWalkInPhone.name}"
+                            </span>
+                            . Mobile numbers must be unique.
+                          </p>
+                        )}
                       </div>
                       <div className="space-y-1">
                         <Label className="text-xs text-yellow-200/70">Gender</Label>

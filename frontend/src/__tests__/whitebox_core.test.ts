@@ -113,25 +113,28 @@ describe("White-Box Test Suite: Core System Functions", () => {
     expect(calculateAccuracy(200, 180)).toBe(90.0);
   });
 
-  // 10. Walk-in Customer Resolution & Separation
-  test("WB-POS-011: resolveWalkInCustomer distinguishes between returning customer and new customer sharing phone", () => {
-    const resolveWalkInMatch = (existingList: Array<{ customer_id: string; name: string }>, enteredName: string) => {
-      const match = existingList.find(
-        (c) => c.name.trim().toLowerCase() === enteredName.trim().toLowerCase()
-      );
-      return match ? { isNew: false, customerId: match.customer_id } : { isNew: true };
+  // 10. Walk-in Customer Unique Mobile Number Enforcement
+  test("WB-POS-011: validateUniqueWalkInPhone enforces unique phone number for new customer", () => {
+    const validateUniqueWalkInPhone = (
+      existingList: Array<{ customer_id: string; contact_number: string; name: string }>,
+      phone: string,
+    ) => {
+      const match = existingList.find((c) => c.contact_number === phone);
+      if (match) {
+        throw new Error(`Mobile number ${phone} is already registered to "${match.name}". Mobile numbers must be unique.`);
+      }
+      return true;
     };
 
-    const existingWithPhone = [{ customer_id: "cust-carl-123", name: "carl" }];
+    const existing = [{ customer_id: "c1", contact_number: "09123456789", name: "carl" }];
 
-    // Entering a new customer 'Testing' with carl's phone must create new customer
-    const newCust = resolveWalkInMatch(existingWithPhone, "Testing");
-    expect(newCust.isNew).toBe(true);
+    // Attempting to register new customer with carl's phone throws unique validation error
+    expect(() => validateUniqueWalkInPhone(existing, "09123456789")).toThrow(
+      'Mobile number 09123456789 is already registered to "carl". Mobile numbers must be unique.',
+    );
 
-    // Entering returning customer 'Carl' with carl's phone reuses Carl
-    const returningCust = resolveWalkInMatch(existingWithPhone, "Carl");
-    expect(returningCust.isNew).toBe(false);
-    expect(returningCust.customerId).toBe("cust-carl-123");
+    // Unique phone number passes validation
+    expect(validateUniqueWalkInPhone(existing, "09991234567")).toBe(true);
   });
 });
 
