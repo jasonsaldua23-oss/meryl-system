@@ -5,6 +5,9 @@
   import { AuthProvider } from "./lib/auth-context.tsx";
   import { queryClient } from "./lib/query-client.ts";
   import "./styles/index.css";
+  import { setupReceiptPrinting } from "./lib/receipt-print";
+
+  setupReceiptPrinting();
 
   createRoot(document.getElementById("root")!).render(
     <QueryClientProvider client={queryClient}>

@@ -339,6 +339,10 @@ function formatPercentValue(value: number) {
   return Number.isInteger(clean) ? String(clean) : clean.toFixed(2).replace(/\.?0+$/, "");
 }
 
+function normalizePhone(value: string) {
+  return value.replace(/\D/g, "").slice(0, 11);
+}
+
 export function PointOfSale() {
   const queryClient = useQueryClient();
   const { user, validateCredentials } = useAuth();
@@ -1143,8 +1147,6 @@ export function PointOfSale() {
   const calculateSubtotal = () => cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const calculateTotalDiscount = () => cart.reduce((sum, item) => sum + getLineDiscountAmount(item), 0);
   const calculateTotal = () => calculateSubtotal() - calculateTotalDiscount();
-
-  const normalizePhone = (value: string) => value.replace(/\D/g, "").slice(0, 11);
 
   const getOrCreateWalkInCustomer = async () => {
     const name = walkInCustomerName.trim();
