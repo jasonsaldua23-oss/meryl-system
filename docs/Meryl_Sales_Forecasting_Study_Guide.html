@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Meryl Shoes Sales Forecasting Study Guide</title>
+  <style>
+    @page { size: A4; margin: 17mm 16mm 18mm; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #191919; font: 10.2pt/1.5 Arial, Helvetica, sans-serif; background: #fff; }
+    h1, h2, h3 { color: #931521; page-break-after: avoid; }
+    h1 { margin: 0 0 10px; font-size: 26pt; line-height: 1.12; }
+    h2 { margin: 22px 0 8px; padding-bottom: 5px; font-size: 16pt; border-bottom: 2px solid #dbb229; }
+    h3 { margin: 15px 0 5px; font-size: 11.5pt; }
+    p { margin: 5px 0 9px; }
+    ul, ol { margin: 5px 0 11px; padding-left: 21px; }
+    li { margin: 3px 0; }
+    code { padding: 1px 3px; border-radius: 3px; color: #7d1019; background: #f7f2e7; font: 8.8pt Consolas, monospace; }
+    table { width: 100%; margin: 8px 0 14px; border-collapse: collapse; font-size: 9pt; }
+    th { color: #fff; background: #9e1621; text-align: left; }
+    th, td { padding: 6px 7px; border: 1px solid #d8d3c8; vertical-align: top; }
+    tr:nth-child(even) td { background: #fbf8f0; }
+    .cover { height: 250mm; display: flex; flex-direction: column; justify-content: center; padding: 20mm 10mm; page-break-after: always; }
+    .brand { color: #d1a400; font-weight: bold; text-transform: uppercase; letter-spacing: 2px; }
+    .rule { width: 92px; height: 7px; margin: 20px 0; border-radius: 5px; background: linear-gradient(90deg,#9e1621,#e3b82c); }
+    .subtitle { max-width: 570px; color: #484848; font-size: 13pt; }
+    .meta { margin-top: 42px; color: #666; }
+    .page-break { page-break-before: always; }
+    .avoid, .formula, .callout { page-break-inside: avoid; }
+    .formula { margin: 9px 0; padding: 10px 12px; border: 1px solid #ded3bc; background: #f5f1e8; text-align: center; font: bold 10.8pt Georgia, serif; }
+    .callout { margin: 11px 0; padding: 10px 12px; border-left: 5px solid #e3b82c; background: #fff8dc; }
+    .warning { border-left-color: #a71925; background: #fff0f1; }
+    .flow { padding: 11px; border: 1px solid #d8d3c8; background: #f8f6f1; white-space: pre-wrap; font: 8.7pt/1.5 Consolas, monospace; }
+    .small { color: #5d5d5d; font-size: 8.5pt; }
+  </style>
+</head>
+<body>
+  <section class="cover">
+    <div class="brand">Meryl Shoes Enterprise System</div>
+    <div class="rule"></div>
+    <h1>Sales Forecasting<br/>Developer Study Guide</h1>
+    <p class="subtitle">The exact algorithm used by the React Sales Analytics forecast, explained from input data to projected revenue, units, scenarios, probabilities, and confidence.</p>
+    <div class="meta">
+      <strong>Purpose:</strong> Developer review and project defense<br/>
+      <strong>Source:</strong> <code>frontend/src/app/components/PredictiveAnalytics.tsx</code><br/>
+      <strong>Date:</strong> October 2, 2026
+    </div>
+  </section>
+
+  <h2>1. What the sales forecast does</h2>
+  <p>The Sales Analytics forecast projects future <strong>store revenue</strong> and <strong>units sold</strong> from recent completed POS transactions. It is a deterministic trend-based heuristic. It does not train a machine-learning model.</p>
+  <div class="callout"><strong>Correct description for your defense:</strong> “The system uses a calendar-day sales baseline adjusted by a capped recent trend. It then generates higher and lower scenarios using historical volatility, momentum, and data coverage.”</div>
+
+  <table>
+    <tr><th>Selected view</th><th>History displayed</th><th>Future periods generated</th></tr>
+    <tr><td>Daily</td><td>Approximately 30 days</td><td>7 days</td></tr>
+    <tr><td>Weekly</td><td>Approximately 12 weeks</td><td>4 weeks</td></tr>
+    <tr><td>Monthly</td><td>12 monthly buckets</td><td>6 months</td></tr>
+    <tr><td>Quarterly</td><td>Approximately 8 quarters</td><td>4 quarters</td></tr>
+    <tr><td>Annually</td><td>5 annual buckets</td><td>3 years</td></tr>
+  </table>
+
+  <h3>Data included</h3>
+  <ul>
+    <li>Only sales whose payment status is completed, paid, successful, or success.</li>
+    <li>Cancelled, canceled, and fully returned transactions are excluded.</li>
+    <li>Revenue comes from the completed sale amount and line subtotals.</li>
+    <li>Units come from the quantity in each sale detail.</li>
+    <li>Dates are grouped into daily, weekly, monthly, quarterly, or annual buckets.</li>
+  </ul>
+
+  <h2>2. Algorithm pipeline</h2>
+  <div class="flow">Completed POS sales
+      |
+      v
+Group revenue and quantity by calendar day
+      |
+      v
+Build up to 90 daily rows, including zero-sales days
+      |
+      +--> Average daily revenue and units
+      +--> First-half vs second-half trend
+      +--> Recent momentum and volatility
+      +--> Selected-period trend and momentum
+      |
+      v
+Base forecast for each future period
+      |
+      +--> Steady projection
+      +--> Higher scenario
+      +--> Lower scenario
+      +--> Directional probabilities
+      +--> History-based confidence score</div>
+
+  <h3>Why zero-sales days are included</h3>
+  <p>The daily baseline includes every calendar day from the start of the model window to today. This prevents the average from being calculated only from busy days. A closed or inactive day therefore lowers the baseline, as it should for a calendar-based store forecast.</p>
+
+  <h2 class="page-break">3. Exact calculation</h2>
+  <h3>3.1 Daily baseline</h3>
+  <p>The model uses up to the last 90 calendar days, beginning later if the first recorded sale is more recent.</p>
+  <div class="formula">Average Daily Revenue = Σ Daily Revenue / Number of Calendar Days</div>
+  <div class="formula">Average Daily Units = Σ Daily Units / Number of Calendar Days</div>
+
+  <h3>3.2 Daily trend</h3>
+  <p>The daily rows are split in half. Their average revenues are compared, then the result is limited to ±25% so a short spike cannot create unlimited growth.</p>
+  <div class="formula">Raw Trend = (Second-Half Average - First-Half Average) / First-Half Average</div>
+  <div class="formula">Daily Trend = clamp(Raw Trend, -0.25, +0.25)</div>
+  <p>If the first-half average is zero, Daily Trend is set to zero.</p>
+
+  <h3>3.3 Future-period multiplier</h3>
+  <p>For future period h, where h begins at 1:</p>
+  <div class="formula">Multiplier[h] = max(0.10, 1 + Daily Trend × (h / 2))</div>
+  <p>The 0.10 floor prevents the forecast multiplier from becoming negative or zero during a continuing decline.</p>
+
+  <h3>3.4 Revenue and unit forecast</h3>
+  <div class="formula">Revenue Forecast[h] = round(Average Daily Revenue × Days in Period × Multiplier[h])</div>
+  <div class="formula">Unit Forecast[h] = round(Average Daily Units × Days in Period × Multiplier[h])</div>
+  <p>For a daily forecast, Days in Period = 1. A weekly forecast normally uses seven days, while monthly and quarterly forecasts use their actual calendar lengths.</p>
+
+  <h2>4. Higher and lower scenarios</h2>
+  <h3>4.1 Period trend</h3>
+  <p>The selected-period revenue buckets are split into halves and compared. The result is capped at ±35%.</p>
+  <div class="formula">Period Trend = clamp((Recent-Half Average - Earlier-Half Average) / Earlier-Half Average, -0.35, +0.35)</div>
+
+  <h3>4.2 Scenario spread</h3>
+  <div class="formula">Spread = clamp(|Period Trend| + 0.15, 0.12, 0.45)</div>
+  <p>When history is insufficient, Spread = 0.35.</p>
+  <div class="formula">Higher Scenario = round(Base Forecast × (1 + Spread))</div>
+  <div class="formula">Lower Scenario = max(0, round(Base Forecast × (1 - Spread)))</div>
+
+  <h3>What the scenarios mean</h3>
+  <p>They are sensitivity bands around the base forecast. They are not statistically calibrated prediction intervals. Use “higher case” and “lower case,” not “guaranteed maximum” and “guaranteed minimum.”</p>
+
+  <h2>5. Probability and confidence</h2>
+  <h3>5.1 Momentum</h3>
+  <p>The algorithm compares up to three recent selected-period buckets with the previous group of the same size. Momentum is capped at ±35%.</p>
+  <div class="formula">Signal = 0.60 × Period Trend + 0.40 × Period Momentum</div>
+
+  <h3>5.2 Volatility</h3>
+  <div class="formula">Variance = Σ(Revenue - Average Revenue)² / n</div>
+  <div class="formula">Volatility = min(1, Standard Deviation / Average Revenue)</div>
+
+  <h3>5.3 History quality and directional probability</h3>
+  <div class="formula">History Quality = min(1, max(Active Revenue Days / 12, Active Revenue Periods / 4))</div>
+  <div class="formula">Probability Confidence = History Quality × max(0.35, 1 - 0.35 × Volatility)</div>
+  <div class="formula">Horizon Decay[h] = max(0.45, 1 - 0.08 × h)</div>
+  <div class="formula">Higher Probability[h] = clamp(50 + round(Signal × 140 × Probability Confidence × Horizon Decay[h]), 20, 80)</div>
+  <div class="formula">Lower Probability[h] = 100 - Higher Probability[h]</div>
+
+  <h3>5.4 Displayed confidence score</h3>
+  <p>History is considered reliable when there are at least three active daily rows or at least two nonempty selected-period buckets.</p>
+  <div class="formula">Confidence = min(90, max(55, 52 + 7 × Number of Forecast-Base Periods))</div>
+  <p>If history is insufficient, confidence is fixed at 35%.</p>
+  <div class="callout warning"><strong>Important:</strong> this confidence value measures data coverage. It is not a statistically computed probability that the forecast will be correct.</div>
+
+  <h2 class="page-break">6. Complete sample calculation</h2>
+  <p>Assume a new store history contains six consecutive calendar days:</p>
+  <table>
+    <tr><th>Day</th><th>Revenue</th><th>Units</th></tr>
+    <tr><td>1</td><td>PHP 1,000</td><td>1</td></tr>
+    <tr><td>2</td><td>PHP 1,200</td><td>1</td></tr>
+    <tr><td>3</td><td>PHP 800</td><td>1</td></tr>
+    <tr><td>4</td><td>PHP 1,400</td><td>2</td></tr>
+    <tr><td>5</td><td>PHP 1,600</td><td>2</td></tr>
+    <tr><td>6</td><td>PHP 1,800</td><td>2</td></tr>
+  </table>
+
+  <h3>Step 1 — averages</h3>
+  <div class="formula">Average Daily Revenue = 7,800 / 6 = PHP 1,300</div>
+  <div class="formula">Average Daily Units = 9 / 6 = 1.50 pairs</div>
+
+  <h3>Step 2 — daily trend</h3>
+  <div class="formula">First-Half Average = (1,000 + 1,200 + 800) / 3 = PHP 1,000</div>
+  <div class="formula">Second-Half Average = (1,400 + 1,600 + 1,800) / 3 = PHP 1,600</div>
+  <div class="formula">Raw Trend = (1,600 - 1,000) / 1,000 = 0.60 or 60%</div>
+  <div class="formula">Daily Trend = clamp(0.60, -0.25, 0.25) = 0.25 or 25%</div>
+
+  <h3>Step 3 — seven-day base forecast</h3>
+  <table>
+    <tr><th>Future day h</th><th>Multiplier</th><th>Revenue forecast</th><th>Unit forecast</th></tr>
+    <tr><td>1</td><td>1 + .25(.5) = 1.125</td><td>PHP 1,463</td><td>2</td></tr>
+    <tr><td>2</td><td>1 + .25(1) = 1.250</td><td>PHP 1,625</td><td>2</td></tr>
+    <tr><td>3</td><td>1 + .25(1.5) = 1.375</td><td>PHP 1,788</td><td>2</td></tr>
+    <tr><td>4</td><td>1 + .25(2) = 1.500</td><td>PHP 1,950</td><td>2</td></tr>
+    <tr><td>5</td><td>1 + .25(2.5) = 1.625</td><td>PHP 2,113</td><td>2</td></tr>
+    <tr><td>6</td><td>1 + .25(3) = 1.750</td><td>PHP 2,275</td><td>3</td></tr>
+    <tr><td>7</td><td>1 + .25(3.5) = 1.875</td><td>PHP 2,438</td><td>3</td></tr>
+    <tr><th>Total</th><th></th><th>PHP 13,652</th><th>16 pairs</th></tr>
+  </table>
+
+  <h3>Step 4 — scenarios for future day 1</h3>
+  <p>The selected-period trend and momentum both reach the +35% cap in this example. Therefore the spread reaches its 45% cap.</p>
+  <div class="formula">Higher Case = round(1,463 × 1.45) = PHP 2,121</div>
+  <div class="formula">Lower Case = round(1,463 × 0.55) = PHP 805</div>
+
+  <h3>Step 5 — probability for future day 1</h3>
+  <ul>
+    <li>Period Trend = 0.35</li>
+    <li>Period Momentum = 0.35</li>
+    <li>Signal = 0.60(0.35) + 0.40(0.35) = 0.35</li>
+    <li>Revenue volatility ≈ 0.263</li>
+    <li>History Quality = 1.00</li>
+    <li>Probability Confidence = 1 × (1 - 0.263 × 0.35) ≈ 0.908</li>
+    <li>Directional swing = round(0.35 × 140 × 0.908 × 1) = 44</li>
+  </ul>
+  <div class="formula">Higher Probability = clamp(50 + 44, 20, 80) = 80%</div>
+  <div class="formula">Lower Probability = 100 - 80 = 20%</div>
+
+  <h2>7. What you must explain honestly</h2>
+  <h3>Strengths</h3>
+  <ul>
+    <li>Uses completed transaction data directly.</li>
+    <li>Includes zero-sales calendar days.</li>
+    <li>Caps extreme growth and decline signals.</li>
+    <li>Supports multiple reporting horizons with actual calendar lengths.</li>
+    <li>Transparent and inexpensive to compute.</li>
+  </ul>
+
+  <h3>Limitations</h3>
+  <ul>
+    <li>No explicit seasonality for Christmas, school opening, payday, weather, or holidays.</li>
+    <li>No causal variables such as promotions, price changes, or stockouts.</li>
+    <li>The multiplier compounds the same capped trend across the horizon and may become aggressive.</li>
+    <li>The higher/lower spread is heuristic, not learned from past forecast errors.</li>
+    <li>The probability and confidence labels are heuristic scores.</li>
+    <li>New stores and sparse data produce unstable forecasts.</li>
+  </ul>
+
+  <h3>Recommended upgrades</h3>
+  <ol>
+    <li>Store every forecast with its generation date and later actual result.</li>
+    <li>Measure MAE, RMSE, WAPE, and bias using rolling backtests.</li>
+    <li>Calculate scenario intervals from historical residuals.</li>
+    <li>Add weekday and seasonal baselines.</li>
+    <li>Mark stockout days so constrained sales are not mistaken for low demand.</li>
+    <li>Model promotional sales separately from normal baseline demand.</li>
+    <li>Compare the existing heuristic against naive and seasonal-naive baselines.</li>
+  </ol>
+
+  <h2>8. Questions to prepare for</h2>
+  <p><strong>What algorithm does your Sales Forecast use?</strong><br/>A calendar-day average forecast adjusted by a capped first-half versus second-half sales trend, with volatility- and momentum-based higher and lower scenarios.</p>
+  <p><strong>Is it machine learning?</strong><br/>No. It is a deterministic time-series heuristic. Its advantage is transparency; its limitation is that it does not learn seasonal or causal patterns.</p>
+  <p><strong>Why cap the trend?</strong><br/>To stop a short sales spike or decline from creating unrealistic future values. Daily trend is capped at ±25%, while selected-period trend and momentum are capped at ±35%.</p>
+  <p><strong>Why include zero-sales days?</strong><br/>The model forecasts calendar-period performance, so days with no completed sales must affect the average.</p>
+  <p><strong>What does 80% higher probability mean?</strong><br/>It is a directional heuristic from trend, momentum, volatility, history quality, and forecast horizon. It is not an empirically calibrated statistical probability.</p>
+  <p><strong>How would you prove forecast quality?</strong><br/>Save forecasts before the predicted period, compare them with later actual values, and report MAE, WAPE, RMSE, and bias against simple baselines.</p>
+
+  <h2>9. Study checklist</h2>
+  <ul>
+    <li>Calculate averages, variance, standard deviation, and percentage change by hand.</li>
+    <li>Explain clamp, floor, rounding, and horizon decay.</li>
+    <li>Trace completed sales into daily and selected-period buckets.</li>
+    <li>Reproduce the PHP 13,652 seven-day example without reading the answer.</li>
+    <li>Explain the difference between a base forecast, scenario range, directional probability, and confidence score.</li>
+    <li>Describe at least three limitations and three practical improvements.</li>
+    <li>Know the implementation source: <code>frontend/src/app/components/PredictiveAnalytics.tsx</code>.</li>
+  </ul>
+
+  <div class="callout"><strong>One-sentence defense answer:</strong> “Meryl’s Sales Forecast converts completed POS sales into a daily baseline, applies a capped recent trend across the selected horizon, and presents base, higher, and lower cases whose directional scores are adjusted for momentum, volatility, data coverage, and horizon distance.”</div>
+  <p class="small">This document describes the Sales Analytics implementation present in the repository on October 2, 2026.</p>
+</body>
+</html>

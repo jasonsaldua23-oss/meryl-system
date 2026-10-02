@@ -783,7 +783,9 @@ export function PredictiveAnalytics() {
         units: row.units,
       }));
 
-    const forecastHistory = buildPeriodBuckets(salesForecastPeriod, getAnalyticsPeriodStart(now, salesForecastPeriod));
+    // Keep zero-sale periods visible so the historical line matches the
+    // calendar-day baseline used by the forecast instead of joining gaps.
+    const forecastHistory = buildPeriodBuckets(salesForecastPeriod, getAnalyticsPeriodStart(now, salesForecastPeriod), true);
     const recentForecastBase = forecastHistory.filter((row) => row.revenue > 0 || row.units > 0).slice(-6);
     const forecastBase = recentForecastBase.length ? recentForecastBase : forecastHistory.slice(-3);
     const selectedPeriodBase = forecastBase.length ? forecastBase : forecastHistory;

@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Meryl Shoes Comprehensive System Reviewer</title>
+  <style>
+    @page { size: A4; margin: 16mm 15mm 18mm; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #1c1c1c; background: white; font: 9.8pt/1.48 Arial, Helvetica, sans-serif; }
+    h1,h2,h3 { color:#941522; page-break-after:avoid; }
+    h1 { margin:0 0 10px; font-size:25pt; line-height:1.12; }
+    h2 { margin:22px 0 8px; padding-bottom:5px; border-bottom:2px solid #dfb52b; font-size:15.5pt; }
+    h3 { margin:14px 0 5px; font-size:11.2pt; }
+    p { margin:5px 0 8px; }
+    ul,ol { margin:5px 0 10px; padding-left:20px; }
+    li { margin:3px 0; }
+    code { padding:1px 3px; border-radius:3px; color:#7b101a; background:#f6f0e3; font:8.5pt Consolas,monospace; }
+    pre { margin:8px 0 13px; padding:10px 12px; border-radius:7px; color:#f5f5f5; background:#17171d; white-space:pre-wrap; font:8pt/1.43 Consolas,monospace; page-break-inside:avoid; }
+    table { width:100%; margin:8px 0 13px; border-collapse:collapse; font-size:8.6pt; }
+    th { color:#fff; background:#9d1722; text-align:left; }
+    th,td { padding:6px 7px; border:1px solid #d8d2c5; vertical-align:top; }
+    tr:nth-child(even) td { background:#fbf8f0; }
+    .cover { height:252mm; display:flex; flex-direction:column; justify-content:center; padding:20mm 10mm; page-break-after:always; }
+    .brand { color:#d1a300; font-weight:bold; text-transform:uppercase; letter-spacing:2px; }
+    .rule { width:95px; height:7px; margin:20px 0; border-radius:5px; background:linear-gradient(90deg,#981622,#e3b82c); }
+    .subtitle { max-width:570px; color:#484848; font-size:12.5pt; }
+    .meta { margin-top:40px; color:#626262; }
+    .page-break { page-break-before:always; }
+    .avoid,.callout,.formula,.flow { page-break-inside:avoid; }
+    .callout { margin:10px 0; padding:10px 12px; border-left:5px solid #e2b62b; background:#fff8dc; }
+    .warning { border-left-color:#a71925; background:#fff0f1; }
+    .formula { margin:8px 0; padding:9px 11px; border:1px solid #ded3bc; background:#f5f1e8; text-align:center; font:bold 10.3pt Georgia,serif; }
+    .flow { padding:10px 12px; border:1px solid #d8d3c8; background:#f8f6f1; white-space:pre-wrap; font:8.3pt/1.47 Consolas,monospace; }
+    .toc a { color:#8f101b; text-decoration:none; }
+    .small { color:#5e5e5e; font-size:8pt; }
+    .pill { display:inline-block; margin:1px 2px 1px 0; padding:2px 7px; border-radius:12px; color:#fff; background:#941522; font-size:7.8pt; }
+  </style>
+</head>
+<body>
+  <section class="cover">
+    <div class="brand">Meryl Shoes Enterprise System</div>
+    <div class="rule"></div>
+    <h1>Comprehensive System Reviewer</h1>
+    <p class="subtitle">Architecture, modules, database relationships, core business rules, security, testing, promotion logic, and the complete Sales Forecast computation from actual POS data.</p>
+    <div class="meta">
+      <strong>Audience:</strong> System developer, project presenter, and technical reviewer<br/>
+      <strong>Repository:</strong> meryl-system<br/>
+      <strong>Prepared:</strong> October 2, 2026<br/>
+      <strong>Focus:</strong> Explain what the system does, how it does it, and why
+    </div>
+  </section>
+
+  <h2>How to study the system</h2>
+  <p>For every feature, practice explaining five things: <strong>actor, input, validation, database effect, and visible output</strong>. A strong defense connects the screen to the business rule and the stored record.</p>
+  <div class="callout"><strong>Main system principle:</strong> PostgreSQL records are the source of truth. React screens, charts, receipts, and reports are derived views of committed data.</div>
+
+  <div class="toc avoid">
+    <h3>Reviewer contents</h3>
+    <ol>
+      <li><a href="#purpose">Purpose, users, and modules</a></li>
+      <li><a href="#architecture">Architecture and data flow</a></li>
+      <li><a href="#database">Database model</a></li>
+      <li><a href="#pos">POS and inventory transaction</a></li>
+      <li><a href="#modules">Module-by-module review</a></li>
+      <li><a href="#promotions">Promotion overlap and attribution</a></li>
+      <li><a href="#forecast">Sales Forecast from actual data</a></li>
+      <li><a href="#sample">Complete forecast example</a></li>
+      <li><a href="#security">Security, audit, and reliability</a></li>
+      <li><a href="#testing">Testing and quality</a></li>
+      <li><a href="#defense">Defense questions and study checklist</a></li>
+      <li><a href="#sources">Source map</a></li>
+    </ol>
+  </div>
+
+  <h2 id="purpose">1. Purpose, users, and modules</h2>
+  <p>Meryl Shoes is an integrated retail system that connects selling, inventory, customer records, replacements, promotions, analytics, reporting, staff access, notifications, and audit evidence.</p>
+  <table>
+    <tr><th>User</th><th>Main responsibilities</th><th>Expected access</th></tr>
+    <tr><td>Administrator</td><td>Full system monitoring, users, promotions, analytics, reports, audit, configuration.</td><td>All administrative modules.</td></tr>
+    <tr><td>Sales staff</td><td>POS checkout, customer selection, permitted sales and receipt operations.</td><td>Sales workflow only.</td></tr>
+    <tr><td>Inventory staff</td><td>Product and stock management, inventory movement review.</td><td>Inventory workflow only.</td></tr>
+  </table>
+  <p><span class="pill">Dashboard</span><span class="pill">Point of Sale</span><span class="pill">Product List</span><span class="pill">Product Settings</span><span class="pill">Inventory</span><span class="pill">Inventory Log</span><span class="pill">Sales</span><span class="pill">Customers</span><span class="pill">Replacement</span><span class="pill">Analytics</span><span class="pill">Promotions</span><span class="pill">Reports</span><span class="pill">Users</span><span class="pill">Security & Audit</span></p>
+
+  <h2 id="architecture">2. Architecture and data flow</h2>
+  <table>
+    <tr><th>Layer</th><th>Technology</th><th>Responsibility</th></tr>
+    <tr><td>Presentation</td><td>React, TypeScript, Vite, Tailwind-style utilities, Recharts</td><td>Role-based pages, forms, receipts, charts, filters, and user feedback.</td></tr>
+    <tr><td>Client data</td><td>React Query and typed API/hook modules</td><td>Fetching, caching, mutations, invalidation, and refetch.</td></tr>
+    <tr><td>Database/API</td><td>Supabase PostgreSQL and PostgREST</td><td>Persistent data, joins, constraints, RLS, triggers, RPC functions.</td></tr>
+    <tr><td>Server services</td><td>Flask/Python</td><td>Protected APIs, email, authentication synchronization, analytics rebuilds, legacy routes.</td></tr>
+  </table>
+  <div class="flow">User action
+   ↓
+React component validation
+   ↓
+React Query hook / API module
+   ├── Supabase SELECT/INSERT/UPDATE
+   ├── PostgreSQL RPC for atomic business transactions
+   └── Flask API for protected services and integrations
+   ↓
+Committed database result
+   ↓
+Query invalidation/refetch
+   ↓
+Updated screen, receipt, report, notification, and analytics</div>
+
+  <h3>Why this separation matters</h3>
+  <ul>
+    <li>Components control interaction and presentation.</li>
+    <li>Database functions protect money and stock changes.</li>
+    <li>RLS protects data if someone bypasses the screen.</li>
+    <li>React Query keeps views synchronized with the database.</li>
+  </ul>
+
+  <h2 id="database" class="page-break">3. Database model</h2>
+  <table>
+    <tr><th>Table</th><th>Role in the system</th><th>Important relationships</th></tr>
+    <tr><td><code>role</code>, <code>user</code></td><td>Staff identity and permissions.</td><td>User belongs to a role.</td></tr>
+    <tr><td><code>customer</code></td><td>Customer profile and contact/demographic data.</td><td>Referenced by sales; email is unique through migration.</td></tr>
+    <tr><td><code>category</code>, <code>product</code></td><td>Shoe classification and sellable variant.</td><td>Each product references one category.</td></tr>
+    <tr><td><code>inventory</code></td><td>Current on-hand, reserved, reorder, SRP, and status.</td><td>One inventory row per product variant.</td></tr>
+    <tr><td><code>inventory_log</code></td><td>Movement ledger for sale, restock, return, replacement, or adjustment.</td><td>References product and originating record.</td></tr>
+    <tr><td><code>sales_transaction</code></td><td>Sale header: date, total, cashier, customer, status.</td><td>Parent of details and payment.</td></tr>
+    <tr><td><code>sales_details</code></td><td>Product, quantity, price, discount, subtotal, and applied promotion.</td><td>References sale and product.</td></tr>
+    <tr><td><code>payment</code></td><td>Method, amount paid, change, payment status.</td><td>One payment per sale.</td></tr>
+    <tr><td><code>returns</code>, <code>return_details</code></td><td>Replacement/refund evidence and affected units.</td><td>References original sale and products.</td></tr>
+    <tr><td><code>promotion</code>, <code>promo_product</code></td><td>Campaign rules and targeted products.</td><td>Many-to-many promotion targeting.</td></tr>
+    <tr><td><code>notification</code></td><td>Customer promotion delivery record.</td><td>References customer and promotion.</td></tr>
+    <tr><td><code>sales_summary</code>, <code>sales_analytics</code></td><td>Stored daily/monthly analytical rollups.</td><td>Derived from completed sales.</td></tr>
+    <tr><td><code>prediction</code>, <code>prediction_history</code></td><td>Demand predictions and later actual-vs-predicted evaluation.</td><td>References product.</td></tr>
+  </table>
+
+  <h3>Key calculated values</h3>
+  <div class="formula">Available Stock = max(0, On-hand Stock - Reserved Stock)</div>
+  <div class="formula">Line Subtotal = Quantity × Unit Price × (1 - Discount% / 100)</div>
+  <div class="formula">Change = Amount Paid - Final Sale Total</div>
+  <p>Cost price, SRP, line price, and subtotal must remain distinct. Cost supports profit decisions; SRP/price supports customer charges; subtotal records realized line revenue.</p>
+
+  <h2 id="pos">4. POS and inventory transaction</h2>
+  <ol>
+    <li>Load only active products with sellable inventory.</li>
+    <li>Select the exact variant: model, color, department, and size.</li>
+    <li>Validate requested quantity against available stock.</li>
+    <li>Resolve one applicable promotion and calculate discount.</li>
+    <li>Select or create a customer; enforce valid and unique email when details are saved.</li>
+    <li>Validate payment and manager override when required.</li>
+    <li>Call <code>complete_sale</code> with sale line details.</li>
+    <li>Commit sale, payment, stock deduction, and logs atomically.</li>
+    <li>Store the actual applied <code>promo_id</code> on the sale line.</li>
+    <li>Print receipt and refresh dependent queries.</li>
+  </ol>
+  <div class="callout"><strong>Atomicity:</strong> a receipt must not exist without the corresponding stock deduction, and stock must not be deducted without a committed sale. The database transaction is the authoritative safeguard.</div>
+
+  <h2 id="modules">5. Module-by-module review</h2>
+  <h3>Dashboard</h3><p>Summarizes operational totals and alerts. It should be treated as a navigation and monitoring surface, with details verified in source modules.</p>
+  <h3>Product List and Product Settings</h3><p>Manage model/variant identity, archive state, stock configuration, price, reorder level, and product images. Departments are Men, Women, and Unisex.</p>
+  <h3>Inventory and Inventory Log</h3><p>Inventory shows current sellable quantities. Inventory Log explains why quantities changed and provides a traceable ledger.</p>
+  <h3>Sales</h3><p>Displays committed transactions, customers, cashier, payment, line details, totals, and receipt actions.</p>
+  <h3>Customers</h3><p>Maintains reusable customer identities. Email uniqueness is case-insensitive and ignores surrounding spaces.</p>
+  <h3>Replacement</h3><p>References the original sale and records returned/replacement units, reasons, value effects, inventory movements, and receipt output.</p>
+  <h3>Analytics</h3><p>Includes product movement, department/customer trends, sales trends and forecasting, size-curve analysis, and attributed promotion performance.</p>
+  <h3>Reports</h3><p>Provides filtered operational and management reports with consistent date ranges and export-ready figures.</p>
+  <h3>Users, Security & Audit</h3><p>Users manages staff lifecycle and roles. Audit records security and business actions with actor, entity, timestamp, and details.</p>
+
+  <h2 id="promotions" class="page-break">6. Promotion overlap and attribution</h2>
+  <p>Promotions do not stack. For each cart line, the POS selects one winner:</p>
+  <ol>
+    <li>Product-specific target outranks category-specific target.</li>
+    <li>Category-specific target outranks All Products.</li>
+    <li>For equal specificity: BOGO outranks Bundle, Fixed, then Percentage.</li>
+    <li>For equal specificity and type, the larger effective discount wins.</li>
+  </ol>
+  <p>Overlapping dates are acceptable when product scopes do not intersect. A storewide promotion overlaps every product, so product-specific rules will override it under the current specificity rule.</p>
+  <div class="callout warning"><strong>Recommended governance:</strong> permit disjoint target overlaps, block duplicate active scope/date conflicts, allow only one active All Products campaign at a time, and display the winning rule before saving.</div>
+
+  <h3>Performance attribution</h3>
+  <ul>
+    <li>New sale lines count toward the campaign identified by recorded <code>promo_id</code>.</li>
+    <li>Legacy rows without <code>promo_id</code> require a positive discount before inference.</li>
+    <li>Ordinary target-product sales during a campaign window are not automatically promotion sales.</li>
+    <li>Only completed sales contribute to attributed promotion revenue and units.</li>
+  </ul>
+
+  <h2 id="forecast">7. Sales Forecast computed from actual data</h2>
+  <div class="callout"><strong>What “actual data” means:</strong> the forecast is recalculated from current completed POS transactions fetched from Supabase. It is not populated with hard-coded example values.</div>
+
+  <h3>7.1 Actual-data extraction</h3>
+  <ol>
+    <li><code>useSales()</code> loads <code>sales_transaction</code> with payment and sale details.</li>
+    <li><code>isCompletedSale</code> retains completed/paid/successful payments.</li>
+    <li>Cancelled, canceled, and fully returned sales are excluded.</li>
+    <li>Revenue uses <code>adjusted_total_amount</code>, then <code>total_amount</code>, then <code>original_total_amount</code>.</li>
+    <li>Units are summed from <code>sales_details.quantity</code>.</li>
+    <li>The transaction timestamp is assigned to its Manila business date.</li>
+    <li>Every missing calendar day is inserted with revenue = 0 and units = 0.</li>
+  </ol>
+
+  <div class="flow">sales_transaction + payment + sales_details
+          ↓ completed-status filter
+Actual sale amount and actual quantities
+          ↓ Manila business-date grouping
+Map&lt;YYYY-MM-DD, { revenue, units }&gt;
+          ↓ fill missing calendar dates with zero
+Continuous daily actual series
+          ↓ average + trend + scenario calculations
+Future revenue and unit projections</div>
+
+  <h3>7.2 History and horizons</h3>
+  <table>
+    <tr><th>View</th><th>Displayed history</th><th>Forecast horizon</th></tr>
+    <tr><td>Daily</td><td>About 30 days, including no-sale days</td><td>7 days</td></tr>
+    <tr><td>Weekly</td><td>About 12 weeks, including empty weeks</td><td>4 weeks</td></tr>
+    <tr><td>Monthly</td><td>12 months, including empty months</td><td>6 months</td></tr>
+    <tr><td>Quarterly</td><td>About 8 quarters</td><td>4 quarters</td></tr>
+    <tr><td>Annually</td><td>5 years</td><td>3 years</td></tr>
+  </table>
+  <p>The model baseline uses up to 90 calendar days, beginning later when the earliest sale is more recent. The historical chart now shows zero-sale periods so it does not connect separated transactions as continuous activity.</p>
+
+  <h3>7.3 Baseline and trend</h3>
+  <div class="formula">Average Daily Revenue = Σ Actual Daily Revenue / Calendar-Day Count</div>
+  <div class="formula">Average Daily Units = Σ Actual Daily Units / Calendar-Day Count</div>
+  <div class="formula">Raw Trend = (Second-Half Average - First-Half Average) / First-Half Average</div>
+  <div class="formula">Daily Trend = clamp(Raw Trend, -0.25, +0.25)</div>
+  <p>If the earlier-half average is zero, trend is set to zero.</p>
+
+  <h3>7.4 Projection</h3>
+  <div class="formula">Multiplier[h] = max(0.10, 1 + Daily Trend × (h / 2))</div>
+  <div class="formula">Projected Revenue[h] = round(Average Daily Revenue × Days in Period × Multiplier[h])</div>
+  <div class="formula">Projected Units[h] = round(Average Daily Units × Days in Period × Multiplier[h])</div>
+
+  <h3>7.5 Higher and lower cases</h3>
+  <div class="formula">Period Trend = clamp((Recent-Half Average - Earlier-Half Average) / Earlier-Half Average, -0.35, +0.35)</div>
+  <div class="formula">Scenario Spread = clamp(|Period Trend| + 0.15, 0.12, 0.45)</div>
+  <div class="formula">Higher = round(Base × (1 + Spread)); Lower = max(0, round(Base × (1 - Spread)))</div>
+  <p>With insufficient history, spread is 35%.</p>
+
+  <h3>7.6 Probability and confidence</h3>
+  <div class="formula">Signal = 0.60 × Period Trend + 0.40 × Period Momentum</div>
+  <div class="formula">Volatility = min(1, Standard Deviation / Average Period Revenue)</div>
+  <div class="formula">Probability Confidence = History Quality × max(0.35, 1 - 0.35 × Volatility)</div>
+  <div class="formula">Higher Probability[h] = clamp(50 + round(Signal × 140 × Probability Confidence × Horizon Decay[h]), 20, 80)</div>
+  <div class="formula">Displayed Confidence = min(90, max(55, 52 + 7 × Forecast-Base Period Count))</div>
+  <p>Insufficient-history confidence is 35%. These are heuristic planning scores, not statistically calibrated confidence intervals.</p>
+
+  <h2 id="sample" class="page-break">8. Complete actual-data-style sample</h2>
+  <p>Assume the completed POS records produce this six-day continuous series:</p>
+  <table>
+    <tr><th>Day</th><th>Actual revenue</th><th>Actual units</th></tr>
+    <tr><td>1</td><td>PHP 1,000</td><td>1</td></tr>
+    <tr><td>2</td><td>PHP 1,200</td><td>1</td></tr>
+    <tr><td>3</td><td>PHP 800</td><td>1</td></tr>
+    <tr><td>4</td><td>PHP 1,400</td><td>2</td></tr>
+    <tr><td>5</td><td>PHP 1,600</td><td>2</td></tr>
+    <tr><td>6</td><td>PHP 1,800</td><td>2</td></tr>
+  </table>
+  <div class="formula">Average Daily Revenue = PHP 7,800 / 6 = PHP 1,300</div>
+  <div class="formula">Average Daily Units = 9 / 6 = 1.50</div>
+  <div class="formula">First-Half Average = PHP 1,000; Second-Half Average = PHP 1,600</div>
+  <div class="formula">Raw Trend = 60%; Capped Daily Trend = 25%</div>
+  <table>
+    <tr><th>Future day</th><th>Multiplier</th><th>Projected revenue</th><th>Projected units</th></tr>
+    <tr><td>1</td><td>1.125</td><td>PHP 1,463</td><td>2</td></tr>
+    <tr><td>2</td><td>1.250</td><td>PHP 1,625</td><td>2</td></tr>
+    <tr><td>3</td><td>1.375</td><td>PHP 1,788</td><td>2</td></tr>
+    <tr><td>4</td><td>1.500</td><td>PHP 1,950</td><td>2</td></tr>
+    <tr><td>5</td><td>1.625</td><td>PHP 2,113</td><td>2</td></tr>
+    <tr><td>6</td><td>1.750</td><td>PHP 2,275</td><td>3</td></tr>
+    <tr><td>7</td><td>1.875</td><td>PHP 2,438</td><td>3</td></tr>
+    <tr><th>Total</th><th></th><th>PHP 13,652</th><th>16</th></tr>
+  </table>
+  <p>If period trend reaches 35%, spread becomes 45%. Day 1 higher case = <strong>PHP 2,121</strong>; lower case = <strong>PHP 805</strong>. With strong positive trend/momentum and adequate history, the higher directional score reaches its 80% cap.</p>
+
+  <h3>Example with a no-sale day</h3>
+  <p>If Day 3 had no completed sale, its actual revenue and units must be zero. It remains in the denominator:</p>
+  <div class="formula">Average Daily Revenue = (1,000 + 1,200 + 0 + 1,400 + 1,600 + 1,800) / 6 = PHP 1,166.67</div>
+  <p>Removing Day 3 would incorrectly divide by five and produce PHP 1,400, overstating the store’s calendar-day baseline by 20%.</p>
+
+  <h2>9. Forecast strengths, limitations, and improvements</h2>
+  <h3>Strengths</h3>
+  <ul><li>Uses current completed POS data.</li><li>Includes zero-sale calendar days.</li><li>Caps extreme changes.</li><li>Supports several horizons.</li><li>Transparent and inexpensive.</li></ul>
+  <h3>Limitations</h3>
+  <ul><li>No explicit holiday, payday, weather, or seasonality variables.</li><li>No explicit promotion or price feature.</li><li>Stockouts can hide demand.</li><li>Trend multiplier may become aggressive over long horizons.</li><li>Scenario/probability/confidence values are heuristic.</li><li>The current model does not publish formal backtest errors beside the chart.</li></ul>
+  <h3>Best upgrades</h3>
+  <ol><li>Persist each forecast before the predicted period.</li><li>Calculate MAE, RMSE, WAPE, and bias.</li><li>Compare against naive and seasonal-naive baselines.</li><li>Learn scenario ranges from residuals.</li><li>Add stockout, weekday, promotion, and seasonal indicators.</li><li>Separate baseline demand from promotional lift.</li></ol>
+
+  <h2 id="security" class="page-break">10. Security, audit, and reliability</h2>
+  <ul>
+    <li><strong>Authentication:</strong> verifies the user.</li>
+    <li><strong>Authorization:</strong> checks permitted role/action.</li>
+    <li><strong>Application session:</strong> sent through <code>x-meryl-session</code> and resolved by database policies.</li>
+    <li><strong>RLS:</strong> protects table rows even when UI checks are bypassed.</li>
+    <li><strong>Manager override:</strong> required for discounts above configured limits.</li>
+    <li><strong>Audit:</strong> actor, action, entity, old/new values, metadata, and timestamp.</li>
+    <li><strong>Atomic RPC:</strong> protects sale, stock, payment, and replacement consistency.</li>
+    <li><strong>Migrations:</strong> constraints and functions must be deployed in controlled order and verified.</li>
+  </ul>
+  <div class="callout warning"><strong>Security rule:</strong> frontend validation is never the final authority. Sensitive rules must be repeated or enforced in PostgreSQL/Flask.</div>
+
+  <h2 id="testing">11. Testing and quality</h2>
+  <table>
+    <tr><th>Test level</th><th>What it should prove</th></tr>
+    <tr><td>Unit/white-box</td><td>Forecast math, target matching, attribution, validation, normalization.</td></tr>
+    <tr><td>Integration</td><td>RPC commits related database changes together.</td></tr>
+    <tr><td>End-to-end</td><td>Real role completes a business workflow through UI and sees correct result.</td></tr>
+    <tr><td>Security</td><td>Unauthorized roles and invalid sessions are rejected by backend/database.</td></tr>
+    <tr><td>Data reconciliation</td><td>Sales totals, payment totals, inventory movements, and reports agree.</td></tr>
+    <tr><td>Forecast backtest</td><td>Stored prior forecasts are compared with later actual values.</td></tr>
+  </table>
+  <p>ISO 25010 quality areas relevant to this project include functional suitability, performance efficiency, compatibility, usability, reliability, security, maintainability, and portability.</p>
+
+  <h2 id="defense">12. Defense questions and answers</h2>
+  <p><strong>What is the source of truth?</strong><br/>Committed PostgreSQL records. UI state and charts are derived and must refetch after mutations.</p>
+  <p><strong>How does a sale affect inventory?</strong><br/>The atomic sale function creates the transaction and detail/payment records, validates stock and discount, deducts inventory, and writes movement evidence in one database transaction.</p>
+  <p><strong>Why do you show no-sale days?</strong><br/>The forecast models calendar performance. Skipping empty days overstates the average and visually connects unrelated sales.</p>
+  <p><strong>Is Sales Forecast machine learning?</strong><br/>No. It is a transparent time-series heuristic using actual daily averages, capped trend, momentum, volatility, and history coverage.</p>
+  <p><strong>Does promotion discount stack?</strong><br/>No. One promotion wins per product line using specificity, type priority, and effective discount.</p>
+  <p><strong>How is promotion performance made accurate?</strong><br/>New sale lines store the applied campaign ID. Only completed attributed lines are counted.</p>
+  <p><strong>What prevents duplicate customers?</strong><br/>Normalized UI validation plus a case-insensitive unique email index in PostgreSQL.</p>
+  <p><strong>What prevents overselling?</strong><br/>UI availability checks improve usability, while the atomic database function is the authoritative concurrent stock check.</p>
+  <p><strong>Is the forecast confidence statistical?</strong><br/>No. It is a history-coverage heuristic. Formal confidence needs residual-based backtesting.</p>
+  <p><strong>What would you improve first?</strong><br/>Persist and backtest forecasts, report WAPE/bias, and centralize forecast logic as one tested service.</p>
+
+  <h3>Study checklist</h3>
+  <ul>
+    <li>Trace one sale from cart to receipt, inventory, reports, and analytics.</li>
+    <li>Draw the core table relationships without notes.</li>
+    <li>Explain available vs on-hand vs reserved stock.</li>
+    <li>Explain promotion winner selection and attribution.</li>
+    <li>Recalculate the PHP 13,652 forecast example.</li>
+    <li>Explain why missing calendar days must equal zero.</li>
+    <li>Name forecast limitations and measurable improvements.</li>
+    <li>Explain authentication, authorization, RLS, audit, and atomicity.</li>
+  </ul>
+
+  <h2 id="sources">13. Source map</h2>
+  <table>
+    <tr><th>Topic</th><th>Primary source</th></tr>
+    <tr><td>Routes and role gates</td><td><code>frontend/src/app/routes.tsx</code>, <code>ProtectedRoute.tsx</code></td></tr>
+    <tr><td>Admin modules</td><td><code>frontend/src/app/components/AdminLayout.tsx</code></td></tr>
+    <tr><td>POS transaction payload</td><td><code>frontend/src/app/components/PointOfSale.tsx</code></td></tr>
+    <tr><td>Products and inventory</td><td><code>frontend/src/app/components/ProductManagement.tsx</code></td></tr>
+    <tr><td>Replacement</td><td><code>frontend/src/app/components/ReturnManagement.tsx</code></td></tr>
+    <tr><td>Promotions</td><td><code>PromotionManagement.tsx</code>, <code>promotion-rules.ts</code>, <code>promotion-performance.ts</code></td></tr>
+    <tr><td>Sales Forecast</td><td><code>frontend/src/app/components/PredictiveAnalytics.tsx</code></td></tr>
+    <tr><td>Reports</td><td><code>frontend/src/app/components/ReportsAnalytics.tsx</code></td></tr>
+    <tr><td>Authentication/session</td><td><code>frontend/src/lib/auth-context.tsx</code>, <code>frontend/src/lib/supabase.ts</code></td></tr>
+    <tr><td>Core schema</td><td><code>database/meryl_system_schema.sql</code></td></tr>
+    <tr><td>Atomic sale/replacement</td><td><code>database/phase7_atomic_replacement.sql</code></td></tr>
+    <tr><td>Session/RLS enforcement</td><td><code>database/security_phase4_session_enforcement.sql</code></td></tr>
+    <tr><td>Discount enforcement</td><td><code>database/security_phase5_discount_enforcement.sql</code></td></tr>
+    <tr><td>Flask services</td><td><code>app.py</code>, <code>app_modules/</code></td></tr>
+  </table>
+  <div class="callout"><strong>Final reviewer advice:</strong> do not memorize screens. Memorize the transaction flow, formulas, business rules, and database evidence. That lets you answer both technical and operational questions.</div>
+  <p class="small">Based on the repository state on October 2, 2026. Forecast probability and confidence are described as implemented heuristics.</p>
+</body>
+</html>
