@@ -128,7 +128,7 @@ The Administrator POS interface provides full cashiering capabilities equipped w
 * **Box 4 [Cart Line Modifiers & Void Button]**: "Buttons to increase/decrease quantity or immediately void an erroneous line item."
 * **Box 5 [Promotions & BOGO Badge Indicator]**: "Auto-applied promotional deductions, percentage discounts, and BOGO bundles."
 * **Box 6 [Cash Tender & Change Calculator]**: "Input field for customer cash tendered with automatic real-time change calculation."
-* **Box 7 [Complete Payment & Checkout Button]**: "Finalizes checkout, commits stock deductions, and generates the official thermal sales receipt."
+* **Box 7 [Complete Payment & Checkout Button]**: "Finalizes checkout, commits stock deductions, and generates the thermal sales invoice."
 
 #### STEPS
 1. Click **Point of Sale** in the left navigation sidebar.
@@ -137,7 +137,7 @@ The Administrator POS interface provides full cashiering capabilities equipped w
 4. To remove an accidental item, click the red **Trash/Void** button next to the corresponding cart line.
 5. In the payment panel on the right, enter the amount of cash received in the **Amount Tendered** field (or enter GCash Reference Number).
 6. The system automatically computes and displays the exact **Change Due**.
-7. Click the golden **Complete Payment & Checkout** button. The sale is logged in the database, stock is deducted in real-time, and the printable Official Receipt modal appears.
+7. Click the golden **Complete Payment & Checkout** button. The sale is logged in the database, stock is deducted in real-time, and the printable Sales Invoice modal appears.
 
 ---
 
@@ -182,24 +182,24 @@ Opens when clicking the Browse button beside the Customer field in the POS payme
 
 ---
 
-### Section 2.5: Official Thermal Sales Receipt & Print Preview Modal
+### Section 2.5: Thermal Sales Invoice & Print Preview Modal
 #### Screen Description
-Automatically appears upon clicking Complete Payment & Checkout, or when clicking Print Receipt from the Sales History view. Formats the order into an official BIR-compliant thermal sales receipt.
+Automatically appears upon clicking Complete Payment & Checkout, or when opening a completed sale from Sales History. Formats the order as a thermal sales invoice for printing.
 
 #### Screenshot Callout Labels
 * **Box 1 [Store Official Header]**: "Displays MERYL SHOES, Araneta Ave, Bacolod City, TIN: 004-247-660-000 VAT REGISTERED, and Contact Telephone."
-* **Box 2 [Transaction Metadata]**: "Details OR/Invoice No., Date & Time, Cashier Name, Customer Name, and Terminal ID (POS-01)."
+* **Box 2 [Transaction Metadata]**: "Details Invoice No., Date & Time, Cashier Name, Customer Name, and Terminal ID (POS-01)."
 * **Box 3 [Itemized Sales Breakdown]**: "Shows shoe name, brand, color, size variant, unit price, quantity, and applied promotional/BOGO discounts."
 * **Box 4 [Financial & Payment Totals]**: "Displays Subtotal, Total Discount, Net Amount Due, Payment Mode (Cash / GCash), Cash Received, and Change Given."
 * **Box 5 [Tax Compliance Summary]**: "Itemizes 12% VATable Sales, VAT Amount, VAT-Exempt Sales, and Zero-Rated Sales."
 * **Box 6 [7-Day Warranty & Return Policy Footer]**: "Prints official store policy: 'Shoes may be exchanged within 7 days with original receipt and box in unworn condition.'"
-* **Box 7 [Barcode & Print Receipt Button]**: "Renders a scannable barcode of the OR number, with a golden 'Print Receipt' button to trigger thermal printing."
+* **Box 7 [QR Code & Print Sales Invoice Button]**: "Renders a scannable QR code of the transaction number, with a golden 'Print Sales Invoice' button to trigger thermal printing."
 
 #### STEPS
 1. After entering the customer's cash or GCash payment, click **Complete Payment & Checkout**.
-2. The **Official Sales Receipt** modal opens displaying the complete receipt layout.
+2. The **Sales Invoice** modal opens displaying the complete invoice layout.
 3. Verify that the items, sizes, discounts, and change amount match the transaction.
-4. Click **Print Receipt** to dispatch the print job to the attached thermal receipt printer (or save as PDF).
+4. Click **Print Sales Invoice** to dispatch the print job to the attached thermal printer (or save as PDF).
 5. Click **Close** to return to the POS register and begin a new sale.
 
 ---
@@ -505,23 +505,23 @@ Opens when clicking the golden View Details icon (eye icon) on any transaction r
 
 ---
 
-### Section 2.18: Duplicate Thermal Sales Receipt Reprint Modal
+### Section 2.18: Duplicate Thermal Sales Invoice Reprint Modal
 #### Screen Description
-Opens when clicking Reprint from either the Sales Management table or the Order Details modal. Re-renders the standardized 58mm/80mm thermal receipt formatted with store branding, BIR compliance indicators, transaction breakdowns, and an official duplicate watermark.
+Opens when viewing the sales invoice from either the Sales Management table or the Order Details modal. Re-renders the standardized 58mm/80mm thermal sales invoice with store branding and the complete transaction breakdown.
 
 #### Screenshot Callout Labels
 * **Box 1 [Store Branding & Branch Header]**: "Enterprise header featuring Meryl Shoes logo, store branch address, TIN, and terminal accreditation numbers."
-* **Box 2 [Official Receipt & Cashier Credentials]**: "Official Receipt number, transaction date/time, POS register identifier, and cashier staff name."
+* **Box 2 [Sales Invoice & Cashier Credentials]**: "Invoice number, transaction date/time, POS register identifier, and cashier staff name."
 * **Box 3 [Itemized Cart Listing Canvas]**: "Clean monospace table detailing item descriptions, sizes, quantities, unit prices, and line amounts."
 * **Box 4 [Payment Tender & Change Calculation]**: "Summary lines showing Subtotal, Applied Discounts, Net VATable Sales, VAT Amount, Total Due, Cash/GCash Paid, and Change."
-* **Box 5 [Official Duplicate Watermark & Barcode]**: "Security watermark designating the printout as an Official Duplicate Copy, along with a scannable transaction barcode."
-* **Box 6 [Print Dispatch & Download Controls]**: "Action buttons: 'Print Receipt' to send the job to the thermal slip printer, and 'Save as PDF' for digital archiving."
+* **Box 5 [Customer Copy & QR Code]**: "Customer-copy label, scannable transaction QR code, and the invoice reference printed below it."
+* **Box 6 [Print Dispatch & Download Controls]**: "The 'Print Sales Invoice' action sends the job to the thermal printer and can also be saved as PDF from the browser print dialog."
 
 #### STEPS
-1. In the Sales table or Order Details dialog, click **Reprint Receipt**.
-2. Review the **Receipt Canvas (Boxes 1–4)** on screen to ensure all items, payment amounts, and VAT details are accurate.
-3. Verify the **Official Duplicate Notice (Box 5)** is present on the slip.
-4. Click **Print Receipt (Box 6)** to print on the connected thermal receipt printer, or select **Save as PDF** to save an electronic copy.
+1. In the Sales table or Order Details dialog, click **View Sales Invoice**.
+2. Review the **Invoice Canvas (Boxes 1–4)** on screen to ensure all items, payment amounts, and VAT details are accurate.
+3. Verify the invoice number and customer-copy details on the slip.
+4. Click **Print Sales Invoice (Box 6)** to print on the connected thermal printer, or select **Save as PDF** in the browser print dialog.
 5. Click **Close** to dismiss the modal.
 
 ---

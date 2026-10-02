@@ -1410,7 +1410,7 @@ function formatReceiptNumber(salesId?: string) {
 
   const printReceipt = () => {
     window.print();
-    toast.success("Receipt sent to printer");
+    toast.success("Sales invoice sent to printer");
   };
 
   return (
@@ -2322,13 +2322,13 @@ function formatReceiptNumber(salesId?: string) {
         </Card>
       </div>
 
-      {/* FORMAL RETAIL SHOE STORE RECEIPT MODAL */}
+      {/* FORMAL RETAIL SHOE STORE SALES INVOICE MODAL */}
       <Dialog open={showReceipt} onOpenChange={setShowReceipt}>
         <DialogContent className="bg-[#12121a] border-[#2d2d3d] text-zinc-900 max-w-md rounded-2xl shadow-2xl p-4 sm:p-6 max-h-[92vh] overflow-y-auto">
           <DialogHeader className="border-b border-[#252536] pb-2">
             <DialogTitle className="text-yellow-300 text-center text-sm font-semibold flex items-center justify-center gap-2">
               <Receipt className="w-4 h-4 text-yellow-400" />
-              Official Sales Receipt
+              Sales Invoice
             </DialogTitle>
           </DialogHeader>
 
@@ -2352,10 +2352,12 @@ function formatReceiptNumber(salesId?: string) {
                 <p className="text-[10px]">TEL: (034) 435 0128</p>
               </div>
 
+              <p className="text-center text-[12px] font-black tracking-wide mt-2">SALES INVOICE</p>
+
               {/* ── TRANSACTION INFO ── */}
               <p className="text-center text-[10px] tracking-widest my-1">- - - - - - - - - - - - - - - - - -</p>
               <div className="space-y-0.5 text-[11px]">
-                <div className="flex justify-between"><span>OR No:</span><span className="font-bold">{receiptData.receiptNumber}</span></div>
+                <div className="flex justify-between"><span>Invoice No:</span><span className="font-bold">{receiptData.receiptNumber}</span></div>
                 <div className="flex justify-between"><span>Date:</span><span>{receiptData.date}</span></div>
                 <div className="flex justify-between"><span>Cashier:</span><span>{receiptData.cashier}</span></div>
                 <div className="flex justify-between"><span>Terminal:</span><span>POS-01</span></div>
@@ -2463,7 +2465,7 @@ function formatReceiptNumber(salesId?: string) {
               {/* ── FOOTER ── */}
               <p className="text-center text-[10px] tracking-widest my-1">- - - - - - - - - - - - - - - - - -</p>
               <p className="text-center text-[10px] font-bold tracking-wide">THIS SERVES AS YOUR</p>
-              <p className="text-center text-[10px] font-bold tracking-wide">OFFICIAL RECEIPT</p>
+              <p className="text-center text-[10px] font-bold tracking-wide">SALES INVOICE</p>
             </div>
           )}
 
@@ -2481,7 +2483,7 @@ function formatReceiptNumber(salesId?: string) {
               className="w-2/3 bg-yellow-400 text-red-950 hover:bg-yellow-500 font-bold rounded-xl shadow text-xs flex items-center justify-center gap-2"
             >
               <Receipt className="w-4 h-4" />
-              <span>Print Receipt</span>
+              <span>Print Sales Invoice</span>
             </Button>
           </DialogFooter>
         </DialogContent>

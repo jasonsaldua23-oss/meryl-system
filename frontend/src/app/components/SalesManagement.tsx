@@ -623,7 +623,7 @@ export function SalesManagement() {
               <div className="relative flex-1 min-w-[220px]">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-yellow-400 pointer-events-none" />
                 <Input
-                  placeholder="Search by receipt #, customer, product..."
+                  placeholder="Search by invoice #, customer, product..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="pl-10 bg-[#181824] border-[#282836] text-white placeholder:text-zinc-500 text-sm focus-visible:ring-yellow-400/40 rounded-xl"
@@ -832,7 +832,7 @@ export function SalesManagement() {
             <Table className="w-full min-w-[860px]">
               <TableHeader>
                 <TableRow className="bg-[#181824] hover:bg-[#181824] border-b border-[#24242F]">
-                  <TableHead className="text-zinc-300 whitespace-nowrap text-center font-semibold">Receipt #</TableHead>
+                  <TableHead className="text-zinc-300 whitespace-nowrap text-center font-semibold">Invoice #</TableHead>
                   {isAdmin && <TableHead className="text-zinc-300 whitespace-nowrap text-center font-semibold">Cashier</TableHead>}
                   <TableHead className="text-zinc-300 whitespace-nowrap text-center font-semibold">Customer</TableHead>
                   <TableHead className="text-zinc-300 whitespace-nowrap text-center font-semibold">Amount</TableHead>
@@ -943,7 +943,7 @@ export function SalesManagement() {
                                   className="bg-[#FFD60A] hover:bg-[#ffcf24] text-[#15151B] font-bold text-xs h-8 px-3 rounded-lg flex items-center gap-1.5 transition-colors"
                                 >
                                   <Receipt className="w-3.5 h-3.5" />
-                                  <span>View Receipt</span>
+                                  <span>View Sales Invoice</span>
                                 </Button>
                                 <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wider ${
                                   sale.status === 'Completed' ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' :
@@ -1158,7 +1158,7 @@ export function SalesManagement() {
           <DialogHeader className="border-b border-[#252536] pb-3 text-left">
             <DialogTitle className="text-white text-base font-bold flex items-center gap-2">
               <Receipt className="w-5 h-5 text-yellow-400" />
-              Official Sales Receipt
+              Sales Invoice
             </DialogTitle>
           </DialogHeader>
 
@@ -1182,10 +1182,12 @@ export function SalesManagement() {
                 <p className="text-[10px]">TEL: (034) 435 0128</p>
               </div>
 
+              <p className="text-center text-[12px] font-black tracking-wide mt-2">SALES INVOICE</p>
+
               {/* ── TRANSACTION INFO ── */}
               <p className="text-center text-[10px] tracking-widest my-1">- - - - - - - - - - - - - - - - - -</p>
               <div className="space-y-0.5 text-[11px]">
-                <div className="flex justify-between"><span>OR No:</span><span className="font-bold">{viewingReceipt.receiptNumber}</span></div>
+                <div className="flex justify-between"><span>Invoice No:</span><span className="font-bold">{viewingReceipt.receiptNumber}</span></div>
                 <div className="flex justify-between"><span>Date:</span><span>{viewingReceipt.date}</span></div>
                 <div className="flex justify-between"><span>Cashier:</span><span>{viewingReceipt.cashier}</span></div>
                 <div className="flex justify-between"><span>Terminal:</span><span>POS-01</span></div>
@@ -1270,7 +1272,7 @@ export function SalesManagement() {
               {/* ── FOOTER ── */}
               <p className="text-center text-[10px] tracking-widest my-1">- - - - - - - - - - - - - - - - - -</p>
               <p className="text-center text-[10px] font-bold tracking-wide">THIS SERVES AS YOUR</p>
-              <p className="text-center text-[10px] font-bold tracking-wide">OFFICIAL RECEIPT</p>
+              <p className="text-center text-[10px] font-bold tracking-wide">SALES INVOICE</p>
             </div>
           )}
 
@@ -1287,12 +1289,12 @@ export function SalesManagement() {
               type="button"
               onClick={() => {
                 window.print();
-                toast.success("Receipt sent to printer");
+                toast.success("Sales invoice sent to printer");
               }}
               className="bg-[#FFD60A] hover:bg-[#ffcf24] text-[#15151B] font-bold rounded-xl text-xs h-9 px-4 flex items-center gap-2 shadow"
             >
               <Receipt className="w-4 h-4" />
-              <span>Print Receipt</span>
+              <span>Print Sales Invoice</span>
             </Button>
           </div>
         </DialogContent>
