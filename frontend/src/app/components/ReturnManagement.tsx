@@ -3257,7 +3257,7 @@ export function ReturnManagement() {
                 />
                 <p className="text-[10px]">Official Retailer &amp; Shoe Center</p>
                 <p className="text-[10px]">Araneta Ave, Bacolod, 6100 Negros Occidental</p>
-                <p className="text-[10px]">TIN: 432-891-002-000 VAT REGISTERED</p>
+                <p className="text-[10px]">TIN: 004-247-660-000 VAT REGISTERED</p>
                 <p className="text-[10px]">TEL: (034) 435 0128</p>
               </div>
               <p className="text-center font-bold text-[12px] mt-2 tracking-[0.2em]">EXCHANGE SLIP</p>

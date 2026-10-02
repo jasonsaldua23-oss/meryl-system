@@ -187,7 +187,7 @@ Opens when clicking the Browse button beside the Customer field in the POS payme
 Automatically appears upon clicking Complete Payment & Checkout, or when clicking Print Receipt from the Sales History view. Formats the order into an official BIR-compliant thermal sales receipt.
 
 #### Screenshot Callout Labels
-* **Box 1 [Store Official Header]**: "Displays MERYL SHOES, Araneta Ave, Bacolod City, TIN: 432-891-002-000-VAT, and Contact Telephone."
+* **Box 1 [Store Official Header]**: "Displays MERYL SHOES, Araneta Ave, Bacolod City, TIN: 004-247-660-000 VAT REGISTERED, and Contact Telephone."
 * **Box 2 [Transaction Metadata]**: "Details OR/Invoice No., Date & Time, Cashier Name, Customer Name, and Terminal ID (POS-01)."
 * **Box 3 [Itemized Sales Breakdown]**: "Shows shoe name, brand, color, size variant, unit price, quantity, and applied promotional/BOGO discounts."
 * **Box 4 [Financial & Payment Totals]**: "Displays Subtotal, Total Discount, Net Amount Due, Payment Mode (Cash / GCash), Cash Received, and Change Given."
