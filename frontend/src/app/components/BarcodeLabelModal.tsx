@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import JsBarcode from "jsbarcode";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./ui/dialog";
 import { Button } from "./ui/button";
@@ -14,6 +14,8 @@ export interface BarcodeLabelProduct {
   size?: string;
   gender?: string;
   price?: number;
+  srp?: number;
+  unit_price?: number;
   category?: string;
 }
 
@@ -23,40 +25,114 @@ interface BarcodeLabelModalProps {
   onClose: () => void;
 }
 
+/**
+ * Helper to derive realistic US / UK / CM shoebox size conversions from EU size
+ * so the label looks like an authentic retail footwear box sticker.
+ */
+function getShoeSizeConversions(sizeRaw: string | undefined, genderRaw: string | undefined) {
+  const euNum = Number(String(sizeRaw ?? "").trim());
+  if (!Number.isFinite(euNum) || euNum < 20 || euNum > 55) {
+    return {
+      eu: sizeRaw || "N/A",
+      us: "—",
+      uk: "—",
+      cm: "—",
+    };
+  }
+  const isWomen = String(genderRaw ?? "").toLowerCase().includes("women");
+  const isKids = String(genderRaw ?? "").toLowerCase().includes("kid");
+
+  let us: number;
+  let uk: number;
+  if (isKids || euNum <= 34) {
+    us = Number((euNum - 18.5).toFixed(1));
+    uk = Number((euNum - 19.5).toFixed(1));
+  } else if (isWomen) {
+    us = Number((euNum - 30.5).toFixed(1));
+    uk = Number((euNum - 32.5).toFixed(1));
+  } else {
+    us = Number((euNum - 33).toFixed(1));
+    uk = Number((euNum - 34).toFixed(1));
+  }
+  const cm = Number((euNum * 0.666 - 1.5).toFixed(1));
+
+  return {
+    eu: String(euNum),
+    us: String(us).replace(/\.0$/, ""),
+    uk: String(uk).replace(/\.0$/, ""),
+    cm: String(cm),
+  };
+}
+
 export function BarcodeLabelModal({ product, isOpen, onClose }: BarcodeLabelModalProps) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [copied, setCopied] = useState(false);
   const [printCopies, setPrintCopies] = useState<number>(1);
 
-  const displaySku = formatSkuDisplay(product?.sku, "MS-000000");
+  const displaySku = formatSkuDisplay(product?.sku, "MS-000001");
 
-  useEffect(() => {
-    if (isOpen && product?.sku && svgRef.current) {
+  // Resolve actual selling price (SRP first, then price, then unit_price * 1.25 fallback)
+  const effectivePrice = Number(
+    (product?.srp && product.srp > 0 ? product.srp : null) ??
+      (product?.price && product.price > 0 ? product.price : null) ??
+      (product?.unit_price && product.unit_price > 0 ? product.unit_price : 0),
+  );
+
+  const formattedPrice = `PHP ${effectivePrice.toLocaleString("en-PH", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+
+  const sizeInfo = getShoeSizeConversions(product?.size, product?.gender);
+
+  const drawBarcode = useCallback(
+    (node: SVGSVGElement | null) => {
+      if (!node || !displaySku) return;
       try {
-        JsBarcode(svgRef.current, product.sku, {
+        JsBarcode(node, displaySku, {
           format: "CODE128",
-          width: 2,
-          height: 48,
+          width: 2.1,
+          height: 54,
           displayValue: true,
+          text: displaySku,
           font: "monospace",
+          fontOptions: "bold",
           fontSize: 13,
           textMargin: 4,
-          margin: 6,
+          margin: 4,
           background: "#ffffff",
           lineColor: "#000000",
         });
-      } catch (err: any) {
+      } catch (err) {
         console.error("JsBarcode render error:", err);
       }
+    },
+    [displaySku],
+  );
+
+  // Callback ref guarantees barcode renders the instant Radix Dialog mounts its portal
+  const setSvgNode = useCallback(
+    (node: SVGSVGElement | null) => {
+      svgRef.current = node;
+      if (node) {
+        drawBarcode(node);
+      }
+    },
+    [drawBarcode],
+  );
+
+  useEffect(() => {
+    if (isOpen && svgRef.current) {
+      drawBarcode(svgRef.current);
     }
-  }, [isOpen, product?.sku]);
+  }, [isOpen, displaySku, drawBarcode]);
 
   const handleCopySku = () => {
-    if (!product?.sku) return;
-    navigator.clipboard?.writeText(product.sku).then(
+    if (!displaySku) return;
+    navigator.clipboard?.writeText(displaySku).then(
       () => {
         setCopied(true);
-        toast.success(`Copied SKU: ${product.sku}`);
+        toast.success(`Copied SKU: ${displaySku}`);
         setTimeout(() => setCopied(false), 2000);
       },
       () => toast.error("Could not copy SKU to clipboard"),
@@ -65,7 +141,7 @@ export function BarcodeLabelModal({ product, isOpen, onClose }: BarcodeLabelModa
 
   const handlePrint = () => {
     if (!product) return;
-    const printWindow = window.open("", "_blank", "width=600,height=500");
+    const printWindow = window.open("", "_blank", "width=720,height=600");
     if (!printWindow) {
       toast.error("Please allow popups to print barcode labels");
       return;
@@ -76,22 +152,35 @@ export function BarcodeLabelModal({ product, isOpen, onClose }: BarcodeLabelModa
     const labelsHtml = Array.from({ length: copies })
       .map(
         () => `
-        <div class="label-card">
-          <div class="header">
-            <span class="store-name">MERYL SHOES</span>
-            <span class="department">${product.gender || "Unisex"}</span>
+        <div class="shoebox-sticker">
+          <div class="top-band">
+            <span class="brand-store">MERYL SHOES</span>
+            <span class="dept-pill">${(product.gender || "UNISEX").toUpperCase()} • ${(product.category || "FOOTWEAR").toUpperCase()}</span>
           </div>
-          <div class="product-title">${product.name}</div>
-          <div class="product-meta">
-            <span><strong>Brand:</strong> ${product.brand || "Meryl"}</span>
-            <span><strong>Color:</strong> ${product.color || "Default"}</span>
-            <span><strong>Size:</strong> ${product.size || "N/A"}</span>
+          <div class="middle-grid">
+            <div class="size-column">
+              <div class="eu-label">EU SIZE</div>
+              <div class="eu-number">${sizeInfo.eu}</div>
+              <div class="sub-sizes">
+                <div><span>US</span><strong>${sizeInfo.us}</strong></div>
+                <div><span>UK</span><strong>${sizeInfo.uk}</strong></div>
+                <div><span>CM</span><strong>${sizeInfo.cm}</strong></div>
+              </div>
+            </div>
+            <div class="details-column">
+              <div class="model-name">${product.name}</div>
+              <div class="meta-line">BRAND: <strong>${(product.brand || "MERYL").toUpperCase()}</strong></div>
+              <div class="meta-line">COLOR: <strong>${(product.color || "STANDARD").toUpperCase()}</strong></div>
+              <div class="meta-line">STYLE SKU: <strong>${displaySku}</strong></div>
+              <div class="price-box">
+                <span class="srp-tag">SRP</span>
+                <span class="srp-val">${formattedPrice}</span>
+              </div>
+            </div>
           </div>
-          <div class="price">PHP ${(Number(product.price) || 0).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-          <div class="barcode-container">
+          <div class="barcode-zone">
             ${svgHtml}
           </div>
-          <div class="footer">Internal Inventory Code 128</div>
         </div>
       `,
       )
@@ -101,92 +190,134 @@ export function BarcodeLabelModal({ product, isOpen, onClose }: BarcodeLabelModa
       <!DOCTYPE html>
       <html>
         <head>
-          <title>Meryl Shoes - Print Barcode Label (${product.sku})</title>
+          <title>Meryl Shoes - Retail Box Barcode (${displaySku})</title>
           <style>
             @page {
               size: auto;
-              margin: 4mm;
+              margin: 5mm;
             }
             body {
-              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+              font-family: "Arial Narrow", Arial, Helvetica, sans-serif;
               margin: 0;
-              padding: 10px;
-              background: #fff;
-              color: #000;
+              padding: 12px;
+              background: #ffffff;
+              color: #000000;
             }
             .labels-grid {
               display: flex;
               flex-wrap: wrap;
-              gap: 8mm;
+              gap: 6mm;
               justify-content: flex-start;
             }
-            .label-card {
-              width: 58mm;
-              min-height: 40mm;
-              padding: 3mm 4mm;
-              border: 1px dashed #666;
+            .shoebox-sticker {
+              width: 82mm;
+              border: 2px solid #000;
+              border-radius: 4px;
+              background: #fff;
+              color: #000;
+              overflow: hidden;
               box-sizing: border-box;
-              display: flex;
-              flex-direction: column;
-              align-items: center;
-              text-align: center;
               page-break-inside: avoid;
             }
-            .header {
-              width: 100%;
+            .top-band {
+              background: #000;
+              color: #fff;
+              padding: 3px 8px;
               display: flex;
               justify-content: space-between;
               align-items: center;
-              border-bottom: 1.5px solid #000;
-              padding-bottom: 1.5mm;
-              margin-bottom: 1.5mm;
-            }
-            .store-name {
-              font-weight: 900;
-              font-size: 11pt;
+              font-size: 8pt;
+              font-weight: 800;
               letter-spacing: 0.5px;
             }
-            .department {
-              font-size: 8pt;
-              text-transform: uppercase;
-              font-weight: 700;
-            }
-            .product-title {
-              font-size: 9pt;
-              font-weight: 700;
-              max-width: 100%;
-              white-space: nowrap;
-              overflow: hidden;
-              text-overflow: ellipsis;
-              margin-bottom: 1mm;
-            }
-            .product-meta {
-              font-size: 7.5pt;
+            .middle-grid {
               display: flex;
-              gap: 4px;
-              justify-content: center;
-              margin-bottom: 1.5mm;
+              border-bottom: 1.5px solid #000;
             }
-            .price {
+            .size-column {
+              width: 26mm;
+              border-right: 1.5px solid #000;
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              justify-content: center;
+              padding: 4px;
+              background: #f7f7f7;
+            }
+            .eu-label {
+              font-size: 7pt;
+              font-weight: 800;
+              letter-spacing: 0.5px;
+            }
+            .eu-number {
+              font-size: 24pt;
+              font-weight: 900;
+              line-height: 1;
+              margin: 2px 0 4px;
+            }
+            .sub-sizes {
+              width: 100%;
+              display: grid;
+              grid-template-columns: repeat(3, 1fr);
+              border-top: 1px solid #000;
+              padding-top: 2px;
+              font-size: 6.5pt;
+              text-align: center;
+            }
+            .sub-sizes span {
+              display: block;
+              color: #444;
+              font-size: 5.5pt;
+            }
+            .details-column {
+              flex: 1;
+              padding: 5px 8px;
+              display: flex;
+              flex-direction: column;
+              justify-content: space-between;
+            }
+            .model-name {
+              font-size: 10pt;
+              font-weight: 900;
+              text-transform: uppercase;
+              line-height: 1.15;
+              margin-bottom: 3px;
+            }
+            .meta-line {
+              font-size: 7.5pt;
+              color: #222;
+              line-height: 1.3;
+            }
+            .price-box {
+              margin-top: 4px;
+              padding-top: 3px;
+              border-top: 1px dashed #000;
+              display: flex;
+              justify-content: space-between;
+              align-items: baseline;
+            }
+            .srp-tag {
+              font-size: 7pt;
+              font-weight: 800;
+              background: #000;
+              color: #fff;
+              padding: 1px 4px;
+            }
+            .srp-val {
               font-size: 11pt;
               font-weight: 900;
-              margin-bottom: 1mm;
             }
-            .barcode-container svg {
-              max-width: 52mm;
+            .barcode-zone {
+              padding: 4px 6px 2px;
+              display: flex;
+              justify-content: center;
+              align-items: center;
+              background: #fff;
+            }
+            .barcode-zone svg {
+              max-width: 100%;
               height: auto;
-              max-height: 22mm;
-            }
-            .footer {
-              font-size: 6pt;
-              color: #555;
-              text-transform: uppercase;
-              margin-top: 1mm;
-            }
-            @media print {
-              .label-card {
-                border: 1px solid #ccc;
-              }
+              max-height: 20mm;
             }
           </style>
         </head>
@@ -217,41 +348,121 @@ export function BarcodeLabelModal({ product, isOpen, onClose }: BarcodeLabelModa
             <DialogTitle className="text-lg font-bold text-white">Product Barcode Label</DialogTitle>
           </div>
           <DialogDescription className="text-xs text-zinc-400">
-            Official internal Code 128 barcode for Meryl Shoes retail inventory &amp; POS scanning.
+            Official retail shoebox Code 128 barcode sticker for Meryl Shoes inventory &amp; POS scanning.
           </DialogDescription>
         </DialogHeader>
 
-        {/* Physical Label Preview */}
-        <div className="my-3 flex justify-center">
-          <div className="w-[300px] bg-white text-black p-4 rounded-xl border border-zinc-300 shadow-md flex flex-col items-center select-none">
-            {/* Header */}
-            <div className="w-full flex justify-between items-center border-b-2 border-black pb-1 mb-2">
-              <span className="font-extrabold tracking-wider text-xs text-red-600">MERYL SHOES</span>
-              <span className="text-[10px] font-bold text-zinc-700 uppercase">{product.gender || "Unisex"}</span>
+        {/* Authentic Retail Shoebox Sticker Preview (inline styles bypass dark-theme .bg-white override) */}
+        <div className="my-2 flex justify-center">
+          <div
+            style={{ backgroundColor: "#ffffff", color: "#000000", borderColor: "#111111" }}
+            className="w-full max-w-[360px] rounded-lg border-2 shadow-xl overflow-hidden select-none"
+          >
+            {/* Top Black Brand Header Band */}
+            <div
+              style={{ backgroundColor: "#111111", color: "#ffffff" }}
+              className="px-3 py-1.5 flex items-center justify-between"
+            >
+              <span className="font-black tracking-wider text-xs" style={{ color: "#facc15" }}>
+                MERYL SHOES
+              </span>
+              <span className="text-[10px] font-bold tracking-widest uppercase" style={{ color: "#e4e4e7" }}>
+                {product.gender || "Unisex"} • {product.category || "Footwear"}
+              </span>
             </div>
 
-            {/* Title & Brand */}
-            <div className="font-bold text-xs text-center line-clamp-1 w-full">{product.name}</div>
-            <div className="text-[10px] text-zinc-600 flex gap-2 mt-0.5">
-              <span>{product.brand || "Meryl"}</span>
-              <span>•</span>
-              <span>{product.color || "Default"}</span>
-              <span>•</span>
-              <span className="font-semibold text-black">Size {product.size || "N/A"}</span>
+            {/* Middle Split: Left Big Size Box + Right Style & SRP Info */}
+            <div className="flex" style={{ borderBottom: "2px solid #111111" }}>
+              {/* Left Column: Authentic Shoebox EU/US/UK/CM Size Block */}
+              <div
+                style={{ backgroundColor: "#f4f4f5", borderRight: "2px solid #111111", color: "#000000" }}
+                className="w-[108px] shrink-0 p-2 flex flex-col items-center justify-between text-center"
+              >
+                <span className="text-[10px] font-extrabold tracking-wider uppercase" style={{ color: "#3f3f46" }}>
+                  EU SIZE
+                </span>
+                <span className="text-4xl font-black leading-none my-1" style={{ color: "#000000" }}>
+                  {sizeInfo.eu}
+                </span>
+                <div
+                  style={{ borderTop: "1.5px solid #111111" }}
+                  className="w-full pt-1 grid grid-cols-3 gap-0.5 text-[10px]"
+                >
+                  <div>
+                    <span className="block text-[8px] font-bold" style={{ color: "#52525b" }}>US</span>
+                    <strong className="font-black" style={{ color: "#000000" }}>{sizeInfo.us}</strong>
+                  </div>
+                  <div style={{ borderLeft: "1px solid #d4d4d8", borderRight: "1px solid #d4d4d8" }}>
+                    <span className="block text-[8px] font-bold" style={{ color: "#52525b" }}>UK</span>
+                    <strong className="font-black" style={{ color: "#000000" }}>{sizeInfo.uk}</strong>
+                  </div>
+                  <div>
+                    <span className="block text-[8px] font-bold" style={{ color: "#52525b" }}>CM</span>
+                    <strong className="font-black" style={{ color: "#000000" }}>{sizeInfo.cm}</strong>
+                  </div>
+                </div>
+              </div>
+
+              {/* Right Column: Shoe Model, Brand, Colorway & Retail Price */}
+              <div
+                style={{ backgroundColor: "#ffffff", color: "#000000" }}
+                className="flex-1 p-2.5 flex flex-col justify-between min-w-0"
+              >
+                <div>
+                  <div
+                    className="font-black text-sm uppercase leading-tight truncate"
+                    style={{ color: "#000000" }}
+                    title={product.name}
+                  >
+                    {product.name}
+                  </div>
+                  <div className="mt-1 space-y-0.5 text-[11px]" style={{ color: "#27272a" }}>
+                    <div className="truncate">
+                      <span className="font-semibold" style={{ color: "#52525b" }}>BRAND: </span>
+                      <span className="font-bold uppercase" style={{ color: "#000000" }}>{product.brand || "Meryl"}</span>
+                    </div>
+                    <div className="truncate">
+                      <span className="font-semibold" style={{ color: "#52525b" }}>COLOR: </span>
+                      <span className="font-bold uppercase" style={{ color: "#000000" }}>{product.color || "Standard"}</span>
+                    </div>
+                    <div className="truncate">
+                      <span className="font-semibold" style={{ color: "#52525b" }}>SKU: </span>
+                      <span className="font-mono font-bold" style={{ color: "#000000" }}>{displaySku}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Perforated Retail Price Tag Strip */}
+                <div
+                  style={{ borderTop: "1.5px dashed #71717a" }}
+                  className="mt-2 pt-1.5 flex items-center justify-between"
+                >
+                  <span
+                    style={{ backgroundColor: "#111111", color: "#ffffff" }}
+                    className="text-[9px] font-black px-1.5 py-0.5 rounded-sm tracking-wider uppercase"
+                  >
+                    RETAIL SRP
+                  </span>
+                  <span className="text-base font-black tracking-tight" style={{ color: "#000000" }}>
+                    {formattedPrice}
+                  </span>
+                </div>
+              </div>
             </div>
 
-            {/* Price */}
-            <div className="text-sm font-extrabold text-black my-1">
-              PHP {(Number(product.price) || 0).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </div>
-
-            {/* Barcode SVG */}
-            <div className="w-full flex justify-center py-1">
-              <svg ref={svgRef} className="max-w-full h-auto" />
-            </div>
-
-            <div className="text-[9px] text-zinc-500 uppercase tracking-widest mt-0.5">
-              Code 128 • Store Standard
+            {/* Bottom Full-Width Scannable Code 128 Barcode Zone */}
+            <div
+              style={{ backgroundColor: "#ffffff", color: "#000000" }}
+              className="px-3 pt-2 pb-1.5 flex flex-col items-center justify-center"
+            >
+              <svg ref={setSvgNode} className="w-full max-w-[310px] h-auto" />
+              <div
+                className="w-full flex justify-between items-center text-[9px] font-bold uppercase tracking-widest px-1 mt-0.5"
+                style={{ color: "#52525b" }}
+              >
+                <span>CODE 128 • POS SCAN READY</span>
+                <span>MERYL SHOES BACOLOD</span>
+              </div>
             </div>
           </div>
         </div>
@@ -300,21 +511,20 @@ export function BarcodeLabelModal({ product, isOpen, onClose }: BarcodeLabelModa
             type="button"
             variant="outline"
             onClick={onClose}
-            className="border-[#38384a] bg-transparent text-zinc-300 hover:bg-[#222230] text-xs h-9"
+            className="border-[#2e2e3d] bg-transparent text-zinc-300 hover:bg-white/5 hover:text-white"
           >
             Close
           </Button>
           <Button
             type="button"
             onClick={handlePrint}
-            className="bg-yellow-400 text-red-950 hover:bg-yellow-500 font-bold text-xs h-9 flex items-center gap-1.5 shadow"
+            className="bg-yellow-400 hover:bg-yellow-500 text-red-950 font-bold flex items-center gap-1.5"
           >
             <Printer className="w-4 h-4" />
-            Print {printCopies} Label{printCopies > 1 ? "s" : ""}
+            Print {printCopies > 1 ? `${printCopies} Labels` : "1 Label"}
           </Button>
         </div>
       </DialogContent>
     </Dialog>
   );
 }
-
