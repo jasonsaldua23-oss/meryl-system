@@ -26,162 +26,250 @@ export function CameraBarcodeScannerModal({
   onClose,
   onDetectedSku,
 }: CameraBarcodeScannerModalProps) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const lastScanTimeRef = useRef<number>(0);
+
   const [cameras, setCameras] = useState<Array<{ id: string; label: string }>>([]);
-  const [selectedCameraId, setSelectedCameraId] = useState<string>("");
+  const [selectedCameraId, setSelectedCameraId] = useState<string>("default");
   const [cameraLoading, setCameraLoading] = useState<boolean>(true);
   const [scanError, setScanError] = useState<string | null>(null);
   const [lastScanned, setLastScanned] = useState<string | null>(null);
   const [continuousMode, setContinuousMode] = useState<boolean>(false);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const lastScanTimeRef = useRef<number>(0);
 
-  // Enumerate cameras when modal opens
-  useEffect(() => {
-    if (!isOpen) return;
-    let active = true;
-    Html5Qrcode.getCameras()
-      .then((devices) => {
-        if (!active) return;
-        if (devices && devices.length > 0) {
-          setCameras(
-            devices.map((d, idx) => ({
-              id: d.id,
-              label: d.label || `Camera ${idx + 1}`,
-            })),
-          );
-          if (!selectedCameraId) {
-            // Prefer rear/environment camera if available
-            const backCam = devices.find((d) =>
-              /back|rear|environment/i.test(d.label || ""),
-            );
-            setSelectedCameraId(backCam ? backCam.id : devices[0].id);
-          }
-        }
-      })
-      .catch(() => {
-        // Will fallback to facingMode constraints
-      });
-    return () => {
-      active = false;
-    };
-  }, [isOpen]);
-
-  // Start / stop live camera barcode scanner
+  // Start / stop native WebRTC video stream + BarcodeDetector / canvas decoder loop
   useEffect(() => {
     if (!isOpen) return;
 
-    let html5Scanner: Html5Qrcode | null = null;
     let isMounted = true;
+    let activeStream: MediaStream | null = null;
+    let scanTimer: ReturnType<typeof setInterval> | null = null;
+    let isDecodingFrame = false;
 
-    const handleDecode = (decodedText: string) => {
-      const cleaned = String(decodedText ?? "").trim();
-      if (!cleaned) return;
-
-      const now = Date.now();
-      // Debounce duplicate frames within 1.8s
-      if (now - lastScanTimeRef.current < 1800) return;
-      lastScanTimeRef.current = now;
-
-      setLastScanned(cleaned);
-      onDetectedSku(cleaned);
-
-      if (!continuousMode) {
-        onClose();
-      }
+    const stopAllTracks = () => {
+      try {
+        if (scanTimer) {
+          clearInterval(scanTimer);
+          scanTimer = null;
+        }
+        if (activeStream) {
+          activeStream.getTracks().forEach((track) => {
+            try {
+              track.stop();
+            } catch {}
+          });
+          activeStream = null;
+        }
+        if (videoRef.current && videoRef.current.srcObject) {
+          try {
+            const s = videoRef.current.srcObject as MediaStream;
+            s.getTracks().forEach((t) => {
+              try {
+                t.stop();
+              } catch {}
+            });
+          } catch {}
+          videoRef.current.srcObject = null;
+        }
+      } catch {}
     };
 
-    const startScanner = async () => {
-      setCameraLoading(true);
-      setScanError(null);
-
-      // Wait briefly for Dialog portal DOM node #pos-barcode-camera-reader to mount
-      await new Promise((r) => setTimeout(r, 150));
-      if (!isMounted) return;
-
-      const container = document.getElementById("pos-barcode-camera-reader");
-      if (!container) {
-        setCameraLoading(false);
-        return;
-      }
-
+    const handleDetectedCode = (rawText: string) => {
       try {
-        const scanner = new Html5Qrcode("pos-barcode-camera-reader", {
-          formatsToSupport: SUPPORTED_BARCODE_FORMATS,
-          verbose: false,
-        });
-        html5Scanner = scanner;
+        const cleaned = String(rawText ?? "").trim();
+        if (!cleaned || !isMounted) return;
 
-        const config = {
-          fps: 15,
-          qrbox: { width: 280, height: 120 },
-          aspectRatio: 1.5,
-        };
+        const now = Date.now();
+        if (now - lastScanTimeRef.current < 1600) return;
+        lastScanTimeRef.current = now;
 
-        if (selectedCameraId) {
-          await scanner.start(
-            selectedCameraId,
-            config,
-            (text) => handleDecode(text),
-            () => {},
-          );
-        } else {
-          try {
-            await scanner.start(
-              { facingMode: "environment" },
-              config,
-              (text) => handleDecode(text),
-              () => {},
-            );
-          } catch {
-            try {
-              scanner.clear();
-            } catch {}
-            const fallbackScanner = new Html5Qrcode("pos-barcode-camera-reader", {
-              formatsToSupport: SUPPORTED_BARCODE_FORMATS,
-              verbose: false,
+        setLastScanned(cleaned);
+        onDetectedSku(cleaned);
+
+        if (!continuousMode) {
+          stopAllTracks();
+          onClose();
+        }
+      } catch {}
+    };
+
+    const initCamera = async () => {
+      try {
+        stopAllTracks();
+        setCameraLoading(true);
+        setScanError(null);
+
+        if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+          throw new Error("Camera API is not available in this browser context.");
+        }
+
+        let stream: MediaStream | null = null;
+        try {
+          if (selectedCameraId && selectedCameraId !== "default") {
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: {
+                deviceId: { exact: selectedCameraId },
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
+              },
+              audio: false,
             });
-            html5Scanner = fallbackScanner;
-            await fallbackScanner.start(
-              { facingMode: "user" },
-              config,
-              (text) => handleDecode(text),
-              () => {},
-            );
+          } else {
+            // Try environment/back camera first, then standard webcam
+            try {
+              stream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                  facingMode: { ideal: "environment" },
+                  width: { ideal: 1280 },
+                  height: { ideal: 720 },
+                },
+                audio: false,
+              });
+            } catch {
+              stream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                  facingMode: { ideal: "user" },
+                  width: { ideal: 1280 },
+                  height: { ideal: 720 },
+                },
+                audio: false,
+              });
+            }
           }
+        } catch {
+          // Basic fallback constraint
+          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
         }
 
         if (!isMounted) {
-          await scanner.stop().catch(() => {});
-          try {
-            scanner.clear();
-          } catch {}
+          if (stream) {
+            stream.getTracks().forEach((t) => {
+              try {
+                t.stop();
+              } catch {}
+            });
+          }
           return;
         }
+
+        activeStream = stream;
+
+        if (videoRef.current && stream) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play().catch(() => {});
+        }
+
+        // Populate camera dropdown without triggering a re-render loop
+        try {
+          if (navigator.mediaDevices.enumerateDevices) {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const videoInputs = devices.filter((d) => d.kind === "videoinput");
+            if (isMounted && videoInputs.length > 0) {
+              setCameras(
+                videoInputs.map((d, idx) => ({
+                  id: d.deviceId || `cam-${idx}`,
+                  label: d.label || `Camera ${idx + 1}`,
+                })),
+              );
+            }
+          }
+        } catch {}
+
+        if (!isMounted) return;
         setCameraLoading(false);
+
+        // Set up frame scanner (Native BarcodeDetector + Canvas fallback)
+        let nativeDetector: any = null;
+        if (typeof window !== "undefined" && "BarcodeDetector" in window) {
+          try {
+            nativeDetector = new (window as any).BarcodeDetector({
+              formats: ["code_128", "code_39", "ean_13", "ean_8", "upc_a", "qr_code"],
+            });
+          } catch {
+            nativeDetector = null;
+          }
+        }
+
+        const offscreenCanvas = document.createElement("canvas");
+        const offscreenCtx = offscreenCanvas.getContext("2d", { willReadFrequently: true });
+
+        scanTimer = setInterval(async () => {
+          if (!isMounted || isDecodingFrame) return;
+          const videoEl = videoRef.current;
+          if (!videoEl || videoEl.readyState < 2 || videoEl.videoWidth === 0) return;
+
+          isDecodingFrame = true;
+          try {
+            // 1. Fast Chromium/Brave/Edge Native BarcodeDetector
+            if (nativeDetector) {
+              try {
+                const detected = await nativeDetector.detect(videoEl);
+                if (detected && detected.length > 0 && detected[0]?.rawValue) {
+                  handleDetectedCode(detected[0].rawValue);
+                  isDecodingFrame = false;
+                  return;
+                }
+              } catch {}
+            }
+
+            // 2. Canvas frame snapshot fallback via Html5Qrcode.scanFile
+            if (offscreenCtx) {
+              const vw = videoEl.videoWidth;
+              const vh = videoEl.videoHeight;
+              offscreenCanvas.width = vw;
+              offscreenCanvas.height = vh;
+              offscreenCtx.drawImage(videoEl, 0, 0, vw, vh);
+
+              const blob: Blob | null = await new Promise((resolve) =>
+                offscreenCanvas.toBlob((b) => resolve(b), "image/jpeg", 0.85),
+              );
+              if (blob && isMounted) {
+                const file = new File([blob], "frame.jpg", { type: "image/jpeg" });
+                const tempEl = document.getElementById("pos-barcode-file-temp");
+                if (tempEl) {
+                  const fileScanner = new Html5Qrcode("pos-barcode-file-temp", {
+                    formatsToSupport: SUPPORTED_BARCODE_FORMATS,
+                    verbose: false,
+                  });
+                  try {
+                    const decoded = await fileScanner.scanFile(file, false);
+                    if (decoded && decoded.trim()) {
+                      handleDetectedCode(decoded.trim());
+                    }
+                  } catch {
+                    // No barcode in this frame
+                  } finally {
+                    try {
+                      fileScanner.clear();
+                    } catch {}
+                  }
+                }
+              }
+            }
+          } catch {}
+          isDecodingFrame = false;
+        }, 250);
       } catch (err: any) {
         if (!isMounted) return;
-        console.warn("Camera barcode scanner error:", err);
         setCameraLoading(false);
-        setScanError(
-          "Could not access camera. Please allow browser camera permission or use 'Scan Barcode Image' below.",
-        );
+        const msg = String(err?.message || "").toLowerCase();
+        if (msg.includes("permission") || msg.includes("denied") || err?.name === "NotAllowedError") {
+          setScanError(
+            "Camera permission was denied. Please allow camera access in your browser address bar, or click 'Scan Barcode Image' below.",
+          );
+        } else {
+          setScanError(
+            "Could not start camera stream (camera may be in use by another app). You can also click 'Scan Barcode Image' below.",
+          );
+        }
       }
     };
 
-    startScanner();
+    initCamera();
 
     return () => {
       isMounted = false;
-      if (html5Scanner) {
-        html5Scanner
-          .stop()
-          .catch(() => {})
-          .finally(() => {
-            try {
-              html5Scanner?.clear();
-            } catch {}
-          });
-      }
+      stopAllTracks();
     };
   }, [isOpen, selectedCameraId, continuousMode]);
 
@@ -192,7 +280,7 @@ export function CameraBarcodeScannerModal({
     if (!file) return;
 
     try {
-      // 1. Try native BarcodeDetector if supported by Chromium/Edge
+      // 1. Try native BarcodeDetector first
       if (typeof window !== "undefined" && "BarcodeDetector" in window) {
         try {
           const detector = new (window as any).BarcodeDetector({
@@ -207,9 +295,7 @@ export function CameraBarcodeScannerModal({
             if (!continuousMode) onClose();
             return;
           }
-        } catch {
-          // Continue to Html5Qrcode fallback
-        }
+        } catch {}
       }
 
       // 2. Fallback to Html5Qrcode file scanner
@@ -233,7 +319,7 @@ export function CameraBarcodeScannerModal({
       toast.error("No Code 128 barcode detected in the selected image.");
     } catch {
       toast.error(
-        "Could not read a barcode from that image. Try cropping closer to the barcode bars or holding the label steady.",
+        "Could not read a barcode from that image. Try using 'Save Barcode PNG' from the Product Barcode Label window.",
       );
     }
   };
@@ -250,7 +336,7 @@ export function CameraBarcodeScannerModal({
           </div>
           <DialogDescription className="text-xs text-zinc-400">
             Point your webcam or phone camera at a Meryl Shoes Code 128 barcode label (e.g.{" "}
-            <span className="font-mono text-yellow-300">MS-000001</span>), or upload a label image to scan immediately.
+            <span className="font-mono text-yellow-300">MS-000001</span>), or upload a saved barcode PNG.
           </DialogDescription>
         </DialogHeader>
 
@@ -259,9 +345,12 @@ export function CameraBarcodeScannerModal({
           {cameras.length > 1 ? (
             <Select value={selectedCameraId} onValueChange={setSelectedCameraId}>
               <SelectTrigger className="h-8 text-xs bg-[#1c1c28] border-[#2e2e40] text-zinc-200 w-[210px]">
-                <SelectValue placeholder="Select Camera" />
+                <SelectValue placeholder="Default Camera" />
               </SelectTrigger>
               <SelectContent className="bg-[#1c1c28] border-[#2e2e40] text-zinc-100">
+                <SelectItem value="default" className="text-xs">
+                  Auto / Default Camera
+                </SelectItem>
                 {cameras.map((cam) => (
                   <SelectItem key={cam.id} value={cam.id} className="text-xs">
                     {cam.label}
@@ -287,20 +376,39 @@ export function CameraBarcodeScannerModal({
           </label>
         </div>
 
-        {/* Live Camera Viewfinder */}
-        <div className="relative rounded-xl overflow-hidden bg-black border border-[#2d2d3d] min-h-[230px] flex items-center justify-center">
-          <div id="pos-barcode-camera-reader" className="w-full" />
+        {/* Live Camera Viewfinder (React-managed <video> prevents DOM mutation crashes) */}
+        <div className="relative rounded-xl overflow-hidden bg-black border border-[#2d2d3d] h-[240px] flex items-center justify-center">
+          <video
+            ref={videoRef}
+            autoPlay
+            muted
+            playsInline
+            className="w-full h-full object-cover"
+          />
+
+          {/* Aiming Reticle Overlay */}
+          {!cameraLoading && !scanError && (
+            <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+              <div className="w-[260px] h-[100px] rounded-lg border-2 border-yellow-400/90 shadow-[0_0_0_9999px_rgba(0,0,0,0.45)] relative flex items-center justify-center">
+                <div className="w-full h-[1.5px] bg-red-500/80 animate-pulse" />
+              </div>
+              <span className="mt-2 text-[10px] font-semibold uppercase tracking-wider text-yellow-300 bg-black/70 px-2.5 py-0.5 rounded-full">
+                Align barcode inside box
+              </span>
+            </div>
+          )}
+
           <div id="pos-barcode-file-temp" className="hidden" />
 
           {cameraLoading && !scanError && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 text-zinc-300 text-xs gap-2">
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/85 text-zinc-300 text-xs gap-2">
               <RefreshCw className="w-5 h-5 animate-spin text-yellow-400" />
               <span>Starting camera barcode scanner...</span>
             </div>
           )}
 
           {scanError && (
-            <div className="p-5 text-center space-y-2">
+            <div className="absolute inset-0 bg-[#12121a] p-5 flex flex-col items-center justify-center text-center space-y-2">
               <AlertCircle className="w-7 h-7 text-red-400 mx-auto" />
               <p className="text-xs text-red-300">{scanError}</p>
             </div>
@@ -350,4 +458,3 @@ export function CameraBarcodeScannerModal({
     </Dialog>
   );
 }
-
