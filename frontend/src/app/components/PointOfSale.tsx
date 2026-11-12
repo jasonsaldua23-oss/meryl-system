@@ -1044,6 +1044,61 @@ export function PointOfSale() {
     processSkuLookup(skuInput);
   };
 
+  // Plug-and-play USB / Wireless HID Barcode Scanner support:
+  // 1) Auto-focus the SKU input when POS loads.
+  // 2) Capture rapid hardware scanner bursts anywhere on the POS screen even if the input isn't focused.
+  const scannerBufferRef = useRef<{ chars: string; lastTime: number }>({ chars: "", lastTime: 0 });
+  const processSkuLookupRef = useRef(processSkuLookup);
+  processSkuLookupRef.current = processSkuLookup;
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      skuInputRef.current?.focus();
+    }, 100);
+    return () => clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      // Ignore if typing inside any input, textarea, or select (the SKU input handles its own Enter submit)
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+
+      const now = Date.now();
+      // Reset buffer if more than 120ms elapsed since previous keystroke (distinguishes scanner burst from stray keys)
+      if (now - scannerBufferRef.current.lastTime > 120) {
+        scannerBufferRef.current.chars = "";
+      }
+      scannerBufferRef.current.lastTime = now;
+
+      if (e.key === "Enter") {
+        const scanned = scannerBufferRef.current.chars.trim();
+        scannerBufferRef.current.chars = "";
+        if (scanned.length >= 3) {
+          e.preventDefault();
+          setSkuInput(scanned);
+          processSkuLookupRef.current(scanned);
+        }
+        return;
+      }
+
+      if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        scannerBufferRef.current.chars += e.key;
+      }
+    };
+
+    window.addEventListener("keydown", handleGlobalKeyDown);
+    return () => window.removeEventListener("keydown", handleGlobalKeyDown);
+  }, []);
+
   const requestManagerApproval = (description: string, action: () => void) => {
     // If current logged-in user is an administrator, authorize immediately without prompt
     if (getRoleGroup(user?.role_name) === "admin") {
