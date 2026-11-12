@@ -284,7 +284,25 @@ Future revenue and unit projections</div>
   <h3>Best upgrades</h3>
   <ol><li>Persist each forecast before the predicted period.</li><li>Calculate MAE, RMSE, WAPE, and bias.</li><li>Compare against naive and seasonal-naive baselines.</li><li>Learn scenario ranges from residuals.</li><li>Add stockout, weekday, promotion, and seasonal indicators.</li><li>Separate baseline demand from promotional lift.</li></ol>
 
-  <h2 id="security" class="page-break">10. Security, audit, and reliability</h2>
+  <h2 id="panel-recommendations" class="page-break">10. Panel recommendations and implementation concept</h2>
+  <p>The panel recommendations strengthen the existing POS and inventory workflow. They should be implemented as one traceable flow: product master data creates a variant SKU, the POS identifies that variant, inventory validates the available quantity, and every adjustment is recorded for reporting and audit.</p>
+  <h3>10.1 Include every sellable product variant in the POS</h3>
+  <p>The POS catalog should include every active, sellable product variant, including each size and color. Archived, inactive, expired, or zero-available variants should remain in the database for history but should not be selectable for a new sale. The manual product search remains available as a fallback.</p>
+  <h3>10.2 Barcode-compatible SKU identification</h3>
+  <p>Each product variant should have one permanent unique SKU. The SKU is encoded in a Code 128 barcode label. A USB scanner is optional during development because a scanner behaves like a keyboard: staff can type the SKU into the same <code>Scan or enter SKU</code> field and press Enter. When the scanner is connected later, the same field and lookup logic work without a new checkout design.</p>
+  <div class="formula">SKU input → exact product variant lookup → status and stock check → add or increment cart quantity</div>
+  <p>The database UUID remains the relational key. The SKU is the human-readable operational identifier. It must remain unique and stable even if the product name, price, or category changes.</p>
+  <h3>10.3 Damaged-product handling</h3>
+  <p>A damaged individual pair should reduce sellable quantity and create a stock movement with the reason <code>Damaged Write-off</code> or <code>Quarantined</code>. The product variant should be marked inactive only when the entire variant is retired, unsafe, or no longer offered. This prevents a single damaged pair from hiding all remaining good stock.</p>
+  <p>The adjustment should record product ID, SKU, quantity, previous quantity, new quantity, reason, remarks, actor, and timestamp. The movement must be auditable and must not be silently edited from the POS.</p>
+  <h3>10.4 Sales percentage from actual data</h3>
+  <p>Sales percentages must be calculated from completed transaction records rather than hard-coded values or the number of products displayed. For a product, department, or promotion:</p>
+  <div class="formula">Sales percentage = completed units or revenue for the segment ÷ completed units or revenue for the selected period × 100</div>
+  <p>The denominator must use the same date range, completion status, return treatment, and metric as the numerator. Cancelled transactions and fully returned quantities are excluded. The result should be recalculated when filters or date ranges change.</p>
+  <h3>Recommended delivery order</h3>
+  <ol><li>Add a unique SKU field and backfill every existing product variant.</li><li>Add exact SKU lookup to the POS and keep manual search as fallback.</li><li>Generate and print Code 128 labels with the SKU below the barcode.</li><li>Add authorized damaged-stock adjustment with an audit reason.</li><li>Calculate sales percentages from completed sales and show the selected denominator.</li><li>Test repeated scans, unknown SKUs, archived items, stockouts, damaged write-offs, and concurrent checkout.</li></ol>
+
+  <h2 id="security" class="page-break">11. Security, audit, and reliability</h2>
   <ul>
     <li><strong>Authentication:</strong> verifies the user.</li>
     <li><strong>Authorization:</strong> checks permitted role/action.</li>
@@ -297,7 +315,7 @@ Future revenue and unit projections</div>
   </ul>
   <div class="callout warning"><strong>Security rule:</strong> frontend validation is never the final authority. Sensitive rules must be repeated or enforced in PostgreSQL/Flask.</div>
 
-  <h2 id="testing">11. Testing and quality</h2>
+  <h2 id="testing">12. Testing and quality</h2>
   <table>
     <tr><th>Test level</th><th>What it should prove</th></tr>
     <tr><td>Unit/white-box</td><td>Forecast math, target matching, attribution, validation, normalization.</td></tr>
@@ -309,7 +327,7 @@ Future revenue and unit projections</div>
   </table>
   <p>ISO 25010 quality areas relevant to this project include functional suitability, performance efficiency, compatibility, usability, reliability, security, maintainability, and portability.</p>
 
-  <h2 id="defense">12. Defense questions and answers</h2>
+  <h2 id="defense">13. Defense questions and answers</h2>
   <p><strong>What is the source of truth?</strong><br/>Committed PostgreSQL records. UI state and charts are derived and must refetch after mutations.</p>
   <p><strong>How does a sale affect inventory?</strong><br/>The atomic sale function creates the transaction and detail/payment records, validates stock and discount, deducts inventory, and writes movement evidence in one database transaction.</p>
   <p><strong>Why do you show no-sale days?</strong><br/>The forecast models calendar performance. Skipping empty days overstates the average and visually connects unrelated sales.</p>
@@ -333,7 +351,7 @@ Future revenue and unit projections</div>
     <li>Explain authentication, authorization, RLS, audit, and atomicity.</li>
   </ul>
 
-  <h2 id="sources">13. Source map</h2>
+  <h2 id="sources">14. Source map</h2>
   <table>
     <tr><th>Topic</th><th>Primary source</th></tr>
     <tr><td>Routes and role gates</td><td><code>frontend/src/app/routes.tsx</code>, <code>ProtectedRoute.tsx</code></td></tr>

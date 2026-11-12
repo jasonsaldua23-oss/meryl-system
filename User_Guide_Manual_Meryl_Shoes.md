@@ -1204,3 +1204,29 @@ Allows inventory custodians to update their account credentials and log out of t
 2. At the end of your shift, click the red **Logout** button.
 3. Confirm that the browser redirects to `/login` to ensure the warehouse terminal is secure.
 
+---
+
+### Section 4.6: Panel Recommendations – SKU, Barcode, Damaged Stock & Sales Percentages
+#### Implementation Concept
+The recommended revision connects product identification, POS checkout, inventory control, and analytics in one traceable flow.
+
+* Every active sellable size/color variant receives one permanent unique SKU.
+* The SKU is the value encoded in a Code 128 barcode label.
+* During development, staff can type the SKU and press **Enter** in the POS **Scan or enter SKU** field. A plug-and-play USB scanner can be connected later because it sends the same keyboard input automatically.
+* The POS performs an exact SKU lookup, checks the product status and available stock, and adds or increments the matching variant in the cart.
+* Archived, inactive, expired, and unavailable variants remain in the database for history but cannot be added to a new sale.
+
+#### Damaged Product Rule
+When one pair is damaged, the system reduces the sellable quantity and creates an Inventory Log entry with the reason **Damaged Write-off** or **Quarantined**. The entire product variant is marked inactive only when it is fully retired or no longer offered. Each adjustment records the SKU, old quantity, new quantity, reason, remarks, staff member, and timestamp.
+
+#### Actual Sales Percentage
+Sales percentages are calculated from completed transaction data using the selected date range and metric:
+
+```text
+Sales percentage = segment completed revenue or units
+                   ÷ total completed revenue or units
+                   × 100
+```
+
+Cancelled sales and fully returned quantities are excluded. The calculation refreshes whenever the user changes the date range or report filter.
+
