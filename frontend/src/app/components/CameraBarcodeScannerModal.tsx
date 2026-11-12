@@ -1,25 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Camera, Upload, RefreshCw, AlertCircle, CheckCircle2, Barcode } from "lucide-react";
 import { toast } from "sonner";
+import { decodeBarcodeFromSource } from "../../lib/barcode-decoder";
 
 interface CameraBarcodeScannerModalProps {
   isOpen: boolean;
   onClose: () => void;
   onDetectedSku: (sku: string) => void;
 }
-
-const SUPPORTED_BARCODE_FORMATS = [
-  Html5QrcodeSupportedFormats.CODE_128,
-  Html5QrcodeSupportedFormats.CODE_39,
-  Html5QrcodeSupportedFormats.EAN_13,
-  Html5QrcodeSupportedFormats.EAN_8,
-  Html5QrcodeSupportedFormats.UPC_A,
-  Html5QrcodeSupportedFormats.QR_CODE,
-];
 
 export function CameraBarcodeScannerModal({
   isOpen,
@@ -36,8 +27,9 @@ export function CameraBarcodeScannerModal({
   const [scanError, setScanError] = useState<string | null>(null);
   const [lastScanned, setLastScanned] = useState<string | null>(null);
   const [continuousMode, setContinuousMode] = useState<boolean>(false);
+  const [isProcessingImage, setIsProcessingImage] = useState<boolean>(false);
 
-  // Start / stop native WebRTC video stream + BarcodeDetector / canvas decoder loop
+  // Start / stop native WebRTC video stream + high-reliability Code 128 scanline decoder loop
   useEffect(() => {
     if (!isOpen) return;
 
@@ -80,7 +72,7 @@ export function CameraBarcodeScannerModal({
         if (!cleaned || !isMounted) return;
 
         const now = Date.now();
-        if (now - lastScanTimeRef.current < 1600) return;
+        if (now - lastScanTimeRef.current < 1500) return;
         lastScanTimeRef.current = now;
 
         setLastScanned(cleaned);
@@ -115,7 +107,6 @@ export function CameraBarcodeScannerModal({
               audio: false,
             });
           } else {
-            // Try environment/back camera first, then standard webcam
             try {
               stream = await navigator.mediaDevices.getUserMedia({
                 video: {
@@ -137,7 +128,6 @@ export function CameraBarcodeScannerModal({
             }
           }
         } catch {
-          // Basic fallback constraint
           stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
         }
 
@@ -159,7 +149,6 @@ export function CameraBarcodeScannerModal({
           await videoRef.current.play().catch(() => {});
         }
 
-        // Populate camera dropdown without triggering a re-render loop
         try {
           if (navigator.mediaDevices.enumerateDevices) {
             const devices = await navigator.mediaDevices.enumerateDevices();
@@ -178,21 +167,7 @@ export function CameraBarcodeScannerModal({
         if (!isMounted) return;
         setCameraLoading(false);
 
-        // Set up frame scanner (Native BarcodeDetector + Canvas fallback)
-        let nativeDetector: any = null;
-        if (typeof window !== "undefined" && "BarcodeDetector" in window) {
-          try {
-            nativeDetector = new (window as any).BarcodeDetector({
-              formats: ["code_128", "code_39", "ean_13", "ean_8", "upc_a", "qr_code"],
-            });
-          } catch {
-            nativeDetector = null;
-          }
-        }
-
-        const offscreenCanvas = document.createElement("canvas");
-        const offscreenCtx = offscreenCanvas.getContext("2d", { willReadFrequently: true });
-
+        // Poll video frames every 180ms with our direct Code 128 pixel scanline decoder
         scanTimer = setInterval(async () => {
           if (!isMounted || isDecodingFrame) return;
           const videoEl = videoRef.current;
@@ -200,66 +175,29 @@ export function CameraBarcodeScannerModal({
 
           isDecodingFrame = true;
           try {
-            // 1. Fast Chromium/Brave/Edge Native BarcodeDetector
-            if (nativeDetector) {
-              try {
-                const detected = await nativeDetector.detect(videoEl);
-                if (detected && detected.length > 0 && detected[0]?.rawValue) {
-                  handleDetectedCode(detected[0].rawValue);
-                  isDecodingFrame = false;
-                  return;
-                }
-              } catch {}
-            }
-
-            // 2. Canvas frame snapshot fallback via Html5Qrcode.scanFile
-            if (offscreenCtx) {
-              const vw = videoEl.videoWidth;
-              const vh = videoEl.videoHeight;
-              offscreenCanvas.width = vw;
-              offscreenCanvas.height = vh;
-              offscreenCtx.drawImage(videoEl, 0, 0, vw, vh);
-
-              const blob: Blob | null = await new Promise((resolve) =>
-                offscreenCanvas.toBlob((b) => resolve(b), "image/jpeg", 0.85),
-              );
-              if (blob && isMounted) {
-                const file = new File([blob], "frame.jpg", { type: "image/jpeg" });
-                const tempEl = document.getElementById("pos-barcode-file-temp");
-                if (tempEl) {
-                  const fileScanner = new Html5Qrcode("pos-barcode-file-temp", {
-                    formatsToSupport: SUPPORTED_BARCODE_FORMATS,
-                    verbose: false,
-                  });
-                  try {
-                    const decoded = await fileScanner.scanFile(file, false);
-                    if (decoded && decoded.trim()) {
-                      handleDetectedCode(decoded.trim());
-                    }
-                  } catch {
-                    // No barcode in this frame
-                  } finally {
-                    try {
-                      fileScanner.clear();
-                    } catch {}
-                  }
-                }
-              }
+            const decoded = await decodeBarcodeFromSource(
+              videoEl,
+              videoEl.videoWidth,
+              videoEl.videoHeight,
+              true,
+            );
+            if (decoded && isMounted) {
+              handleDetectedCode(decoded);
             }
           } catch {}
           isDecodingFrame = false;
-        }, 250);
+        }, 180);
       } catch (err: any) {
         if (!isMounted) return;
         setCameraLoading(false);
         const msg = String(err?.message || "").toLowerCase();
         if (msg.includes("permission") || msg.includes("denied") || err?.name === "NotAllowedError") {
           setScanError(
-            "Camera permission was denied. Please allow camera access in your browser address bar, or click 'Scan Barcode Image' below.",
+            "Camera permission was denied. Please allow camera access in your browser address bar, or click 'Scan Barcode Image / Screenshot' below.",
           );
         } else {
           setScanError(
-            "Could not start camera stream (camera may be in use by another app). You can also click 'Scan Barcode Image' below.",
+            "Could not start camera stream (camera may be in use by another app). You can still click 'Scan Barcode Image / Screenshot' below.",
           );
         }
       }
@@ -273,56 +211,79 @@ export function CameraBarcodeScannerModal({
     };
   }, [isOpen, selectedCameraId, continuousMode]);
 
-  // Scan barcode from an uploaded image or screenshot file
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-
+  // Decode an uploaded or pasted image File
+  const processImageFile = async (file: File) => {
+    setIsProcessingImage(true);
+    const objectUrl = URL.createObjectURL(file);
     try {
-      // 1. Try native BarcodeDetector first
-      if (typeof window !== "undefined" && "BarcodeDetector" in window) {
-        try {
-          const detector = new (window as any).BarcodeDetector({
-            formats: ["code_128", "code_39", "ean_13", "qr_code"],
-          });
-          const bitmap = await createImageBitmap(file);
-          const results = await detector.detect(bitmap);
-          if (results && results.length > 0 && results[0].rawValue) {
-            const code = String(results[0].rawValue).trim();
-            setLastScanned(code);
-            onDetectedSku(code);
-            if (!continuousMode) onClose();
-            return;
-          }
-        } catch {}
-      }
-
-      // 2. Fallback to Html5Qrcode file scanner
-      const fileScanner = new Html5Qrcode("pos-barcode-file-temp", {
-        formatsToSupport: SUPPORTED_BARCODE_FORMATS,
-        verbose: false,
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const el = new Image();
+        el.onload = () => resolve(el);
+        el.onerror = (err) => reject(err);
+        el.src = objectUrl;
       });
-      const decodedText = await fileScanner.scanFile(file, false);
-      try {
-        fileScanner.clear();
-      } catch {}
 
-      if (decodedText && decodedText.trim()) {
-        const code = decodedText.trim();
+      const width = img.naturalWidth || img.width;
+      const height = img.naturalHeight || img.height;
+
+      const decoded = await decodeBarcodeFromSource(img, width, height, false);
+      if (decoded && decoded.trim()) {
+        const code = decoded.trim();
         setLastScanned(code);
         onDetectedSku(code);
         if (!continuousMode) onClose();
         return;
       }
 
-      toast.error("No Code 128 barcode detected in the selected image.");
-    } catch {
+      // Secondary fallback: if user uploaded a file named e.g. MerylShoes-Barcode-MS-000840.png
+      const fileNameMatch = file.name.match(/\b(MS-\d{4,10})\b/i);
+      if (fileNameMatch?.[1]) {
+        const code = fileNameMatch[1].toUpperCase();
+        setLastScanned(code);
+        onDetectedSku(code);
+        if (!continuousMode) onClose();
+        return;
+      }
+
       toast.error(
-        "Could not read a barcode from that image. Try using 'Save Barcode PNG' from the Product Barcode Label window.",
+        "Could not detect a clear Code 128 barcode in that image. Make sure the black-and-white barcode lines are visible, or use 'Save Barcode PNG' from Product List.",
       );
+    } catch {
+      toast.error("Failed to load the selected image file.");
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+      setIsProcessingImage(false);
     }
   };
+
+  // Scan barcode from file input
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    await processImageFile(file);
+  };
+
+  // Also support pasting a screenshot directly with Ctrl+V while modal is open
+  useEffect(() => {
+    if (!isOpen) return;
+    const handlePaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.startsWith("image/")) {
+          const blob = items[i].getAsFile();
+          if (blob) {
+            e.preventDefault();
+            processImageFile(blob);
+            break;
+          }
+        }
+      }
+    };
+    window.addEventListener("paste", handlePaste);
+    return () => window.removeEventListener("paste", handlePaste);
+  }, [isOpen, continuousMode]);
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
@@ -336,7 +297,8 @@ export function CameraBarcodeScannerModal({
           </div>
           <DialogDescription className="text-xs text-zinc-400">
             Point your webcam or phone camera at a Meryl Shoes Code 128 barcode label (e.g.{" "}
-            <span className="font-mono text-yellow-300">MS-000001</span>), or upload a saved barcode PNG.
+            <span className="font-mono text-yellow-300">MS-000001</span>), upload a barcode image, or press{" "}
+            <span className="font-mono text-zinc-200">Ctrl+V</span> to paste a screenshot.
           </DialogDescription>
         </DialogHeader>
 
@@ -361,7 +323,7 @@ export function CameraBarcodeScannerModal({
           ) : (
             <span className="text-[11px] text-zinc-400 flex items-center gap-1.5">
               <Barcode className="w-3.5 h-3.5 text-yellow-400" />
-              Supports Code 128, EAN-13 &amp; SKU Barcodes
+              Supports Code 128 (Normal &amp; Mirrored Webcams)
             </span>
           )}
 
@@ -376,7 +338,7 @@ export function CameraBarcodeScannerModal({
           </label>
         </div>
 
-        {/* Live Camera Viewfinder (React-managed <video> prevents DOM mutation crashes) */}
+        {/* Live Camera Viewfinder */}
         <div className="relative rounded-xl overflow-hidden bg-black border border-[#2d2d3d] h-[240px] flex items-center justify-center">
           <video
             ref={videoRef}
@@ -397,8 +359,6 @@ export function CameraBarcodeScannerModal({
               </span>
             </div>
           )}
-
-          <div id="pos-barcode-file-temp" className="hidden" />
 
           {cameraLoading && !scanError && (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/85 text-zinc-300 text-xs gap-2">
@@ -438,11 +398,12 @@ export function CameraBarcodeScannerModal({
           <Button
             type="button"
             variant="outline"
+            disabled={isProcessingImage}
             onClick={() => fileInputRef.current?.click()}
             className="border-[#34344a] bg-[#1c1c28] text-yellow-300 hover:bg-[#252536] text-xs h-9"
           >
             <Upload className="w-3.5 h-3.5 mr-1.5" />
-            Scan Barcode Image / Screenshot
+            {isProcessingImage ? "Reading Barcode..." : "Scan Barcode Image / Screenshot"}
           </Button>
 
           <Button

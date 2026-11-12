@@ -444,5 +444,117 @@ describe("White-Box Test Suite: Core System Functions", () => {
     expect(calcPct(6000, totalRevenue)).toBe(30.0);
     expect(calcPct(2000, totalRevenue)).toBe(10.0);
   });
+
+  // 17. Code 128 Camera & Screenshot Image Decoder (Normal, Mirrored & Dark-UI Screenshot)
+  test("WB-POS-015: scanImageDataForCode128 decodes Code 128 Set B/C barcodes in normal, mirrored, and full-screen dark screenshot layouts", async () => {
+    const { CODE128_PATTERNS, scanImageDataForCode128 } = await import("../lib/barcode-decoder");
+
+    // Helper to synthesize a Code 128 symbol sequence into an ImageData object
+    const buildBarcodeImage = (
+      symbolValues: number[],
+      opts: {
+        width: number;
+        height: number;
+        modulePx: number;
+        mirror?: boolean;
+        darkOuterBackground?: boolean;
+        blur?: boolean;
+      },
+    ): ImageData => {
+      let checksum = symbolValues[0];
+      for (let i = 1; i < symbolValues.length; i++) {
+        checksum += symbolValues[i] * i;
+      }
+      const fullSymbols = [...symbolValues, checksum % 103, 106];
+
+      // Expand into 1-module array (1 = bar, 0 = space)
+      const modules: number[] = [];
+      for (const sym of fullSymbols) {
+        const pat = CODE128_PATTERNS[sym];
+        for (let i = 0; i < pat.length; i++) {
+          const count = Number(pat[i]);
+          const isBar = i % 2 === 0 ? 1 : 0;
+          for (let c = 0; c < count; c++) modules.push(isBar);
+        }
+      }
+
+      const { width, height, modulePx, mirror = false, darkOuterBackground = false, blur = false } = opts;
+      const data = new Uint8ClampedArray(width * height * 4);
+      const barcodePixelWidth = modules.length * modulePx;
+      const startX = Math.floor((width - barcodePixelWidth) / 2);
+      const stickerPad = Math.round(modulePx * 12);
+
+      for (let y = 0; y < height; y++) {
+        const inVerticalCard = y >= Math.floor(height * 0.25) && y <= Math.floor(height * 0.75);
+        for (let x = 0; x < width; x++) {
+          const mapX = mirror ? width - 1 - x : x;
+          let lum = darkOuterBackground ? 21 : 255;
+
+          if (inVerticalCard && mapX >= startX - stickerPad && mapX < startX + barcodePixelWidth + stickerPad) {
+            lum = 255; // white sticker quiet zone
+            if (mapX >= startX && mapX < startX + barcodePixelWidth) {
+              const modIdx = Math.floor((mapX - startX) / modulePx);
+              if (modules[modIdx] === 1) lum = 10;
+            }
+          }
+
+          const idx = (y * width + x) * 4;
+          data[idx] = lum;
+          data[idx + 1] = lum;
+          data[idx + 2] = lum;
+          data[idx + 3] = 255;
+        }
+      }
+
+      if (blur) {
+        // Simulate webcam / JPEG horizontal low-pass blur
+        const copy = new Uint8ClampedArray(data);
+        for (let y = 0; y < height; y++) {
+          for (let x = 1; x < width - 1; x++) {
+            const idx = (y * width + x) * 4;
+            const blurred = Math.round(
+              0.25 * copy[idx - 4] + 0.5 * copy[idx] + 0.25 * copy[idx + 4],
+            );
+            data[idx] = blurred;
+            data[idx + 1] = blurred;
+            data[idx + 2] = blurred;
+          }
+        }
+      }
+
+      return { data, width, height, colorSpace: "srgb" } as ImageData;
+    };
+
+    // JsBarcode encodes "MS-000840" as: Start B (104), 'M' (45), 'S' (51), '-' (13), Code C (99), 00 (0), 08 (8), 40 (40)
+    const jsBarcodeSymbols = [104, 45, 51, 13, 99, 0, 8, 40];
+
+    // 1. Standard sticker image
+    const imgNormal = buildBarcodeImage(jsBarcodeSymbols, {
+      width: 600,
+      height: 160,
+      modulePx: 3,
+    });
+    expect(scanImageDataForCode128(imgNormal)).toBe("MS-000840");
+
+    // 2. Mirrored laptop webcam frame
+    const imgMirrored = buildBarcodeImage(jsBarcodeSymbols, {
+      width: 600,
+      height: 160,
+      modulePx: 3,
+      mirror: true,
+    });
+    expect(scanImageDataForCode128(imgMirrored)).toBe("MS-000840");
+
+    // 3. Full-screen dark UI screenshot with blurred small barcode inside white modal card
+    const imgDarkScreenshot = buildBarcodeImage(jsBarcodeSymbols, {
+      width: 1024,
+      height: 500,
+      modulePx: 2,
+      darkOuterBackground: true,
+      blur: true,
+    });
+    expect(scanImageDataForCode128(imgDarkScreenshot)).toBe("MS-000840");
+  });
 });
+
 
