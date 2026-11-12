@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import JsBarcode from "jsbarcode";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./ui/dialog";
 import { Button } from "./ui/button";
-import { Copy, Printer, Check, Tag } from "lucide-react";
+import { Copy, Printer, Check, Tag, Download } from "lucide-react";
 import { toast } from "sonner";
 import { formatSkuDisplay } from "../../lib/sku";
 
@@ -337,6 +337,40 @@ export function BarcodeLabelModal({ product, isOpen, onClose }: BarcodeLabelModa
     printWindow.document.close();
   };
 
+  const handleDownloadPng = () => {
+    if (!svgRef.current) return;
+    try {
+      const serializer = new XMLSerializer();
+      const svgString = serializer.serializeToString(svgRef.current);
+      const svgBlob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
+      const url = URL.createObjectURL(svgBlob);
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(600, img.width * 2);
+        canvas.height = Math.max(260, img.height * 2 + 40);
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          const x = (canvas.width - img.width * 1.8) / 2;
+          const y = (canvas.height - img.height * 1.8) / 2;
+          ctx.drawImage(img, x, y, img.width * 1.8, img.height * 1.8);
+          const pngUrl = canvas.toDataURL("image/png");
+          const a = document.createElement("a");
+          a.href = pngUrl;
+          a.download = `${displaySku}-barcode.png`;
+          a.click();
+          toast.success(`Downloaded ${displaySku}-barcode.png`);
+        }
+        URL.revokeObjectURL(url);
+      };
+      img.src = url;
+    } catch {
+      toast.error("Could not download barcode image");
+    }
+  };
+
   if (!product) return null;
 
   return (
@@ -506,23 +540,35 @@ export function BarcodeLabelModal({ product, isOpen, onClose }: BarcodeLabelModa
         </div>
 
         {/* Buttons */}
-        <div className="flex items-center justify-end gap-2 pt-2">
+        <div className="flex items-center justify-between gap-2 pt-2">
           <Button
             type="button"
             variant="outline"
-            onClick={onClose}
-            className="border-[#2e2e3d] bg-transparent text-zinc-300 hover:bg-white/5 hover:text-white"
+            onClick={handleDownloadPng}
+            className="border-[#2e2e3d] bg-[#1e1e2a] text-yellow-300 hover:bg-[#2a2a3a] flex items-center gap-1.5 text-xs"
+            title="Download barcode as PNG to test with camera or file scanner"
           >
-            Close
+            <Download className="w-3.5 h-3.5" />
+            Save Barcode PNG
           </Button>
-          <Button
-            type="button"
-            onClick={handlePrint}
-            className="bg-yellow-400 hover:bg-yellow-500 text-red-950 font-bold flex items-center gap-1.5"
-          >
-            <Printer className="w-4 h-4" />
-            Print {printCopies > 1 ? `${printCopies} Labels` : "1 Label"}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onClose}
+              className="border-[#2e2e3d] bg-transparent text-zinc-300 hover:bg-white/5 hover:text-white"
+            >
+              Close
+            </Button>
+            <Button
+              type="button"
+              onClick={handlePrint}
+              className="bg-yellow-400 hover:bg-yellow-500 text-red-950 font-bold flex items-center gap-1.5"
+            >
+              <Printer className="w-4 h-4" />
+              Print {printCopies > 1 ? `${printCopies} Labels` : "1 Label"}
+            </Button>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

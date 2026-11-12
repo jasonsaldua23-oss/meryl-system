@@ -10,7 +10,7 @@ import { Label } from "./ui/label";
 import { Checkbox } from "./ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
-import { Coins, CreditCard, KeyRound, Minus, Package, Plus, Receipt, Search, ShieldAlert, Trash2, Users, Barcode } from "lucide-react";
+import { Coins, CreditCard, KeyRound, Minus, Package, Plus, Receipt, Search, ShieldAlert, Trash2, Users, Barcode, Camera } from "lucide-react";
 import { toast } from "sonner";
 import { useCustomers, useInventory, useProducts, usePromotions } from "../../lib/hooks";
 import { getRoleGroup, useAuth } from "../../lib/auth-context";
@@ -22,6 +22,7 @@ import { isPromotionLive, promotionTargetMatches } from "../../lib/promotion-rul
 import { exactIlikePattern, findCustomerWithEmail, isValidCustomerEmail, normalizeCustomerEmail } from "../../lib/customer-validation";
 import { normalizeProductDepartment } from "../../lib/product-department";
 import { normalizeSku, isMatchingSku } from "../../lib/sku";
+import { CameraBarcodeScannerModal } from "./CameraBarcodeScannerModal";
 import merylLogoBw from "../../assets/Meryl_Logo_BW.svg";
 
 type CartItem = {
@@ -389,6 +390,7 @@ export function PointOfSale() {
   const [modalCategoryFilter, setModalCategoryFilter] = useState("All");
   const [customerSearch, setCustomerSearch] = useState("");
   const [skuInput, setSkuInput] = useState("");
+  const [isCameraScannerOpen, setIsCameraScannerOpen] = useState(false);
   const skuInputRef = useRef<HTMLInputElement | null>(null);
 
   const customers = (customersQuery.data as any[]) ?? [];
@@ -984,9 +986,8 @@ export function PointOfSale() {
     setProductSearch("");
   };
 
-  const handleSkuScanOrEntry = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const raw = skuInput.trim();
+  const processSkuLookup = (rawCode: string) => {
+    const raw = rawCode.trim();
     if (!raw) {
       toast.error("Please scan a barcode or enter a SKU.");
       skuInputRef.current?.focus();
@@ -1036,6 +1037,11 @@ export function PointOfSale() {
     } else {
       skuInputRef.current?.select();
     }
+  };
+
+  const handleSkuScanOrEntry = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    processSkuLookup(skuInput);
   };
 
   const requestManagerApproval = (description: string, action: () => void) => {
@@ -1683,11 +1689,11 @@ function formatReceiptNumber(salesId?: string) {
                     Scan or enter SKU
                   </Label>
                   <span className="text-[11px] text-zinc-400 hidden sm:inline">
-                    USB scanner or keyboard entry • Press Enter
+                    USB scanner, camera, or keyboard • Press Enter
                   </span>
                 </div>
-                <div className="flex gap-2">
-                  <div className="relative flex-1">
+                <div className="flex flex-wrap sm:flex-nowrap gap-2">
+                  <div className="relative flex-1 min-w-[200px]">
                     <Barcode className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-yellow-400/70" />
                     <Input
                       id="skuScanInput"
@@ -1701,6 +1707,16 @@ function formatReceiptNumber(salesId?: string) {
                     />
                   </div>
                   <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setIsCameraScannerOpen(true)}
+                    className="border-[#343447] bg-[#1c1c28] text-yellow-300 hover:bg-[#262636] hover:text-yellow-200 font-semibold text-xs h-10 px-3.5 rounded-xl shrink-0 flex items-center gap-1.5"
+                    title="Scan Code 128 barcode using webcam, phone camera, or barcode image"
+                  >
+                    <Camera className="w-4 h-4 text-yellow-400" />
+                    <span>Camera Scan</span>
+                  </Button>
+                  <Button
                     type="submit"
                     className="bg-yellow-400 text-red-950 hover:bg-yellow-500 font-bold text-xs h-10 px-4 rounded-xl shadow shrink-0"
                   >
@@ -1708,6 +1724,15 @@ function formatReceiptNumber(salesId?: string) {
                   </Button>
                 </div>
               </form>
+
+              <CameraBarcodeScannerModal
+                isOpen={isCameraScannerOpen}
+                onClose={() => setIsCameraScannerOpen(false)}
+                onDetectedSku={(scannedCode) => {
+                  setSkuInput(scannedCode);
+                  processSkuLookup(scannedCode);
+                }}
+              />
 
               {/* 1. SELECT PRODUCT DROPDOWN */}
               <div className="space-y-1.5">
