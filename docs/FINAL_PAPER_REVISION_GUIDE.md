@@ -244,3 +244,4 @@ erDiagram
 | **WB-POS-012** | `handleSkuScanOrEntry()` | Exact SKU lookup, status/expiry/stock guardrails, cart increment, stock ceiling check | Valid scan, repeated scan, unknown, inactive, expired, OOS | Adds/increments valid SKU; rejects invalid/excess scans | All 8 branches verified | **Passed** |
 | **WB-INV-013** | `DamagedStockModal` submission logic | Deducts `stock_quantity`, preserves `Active` unless retired, logs negative adjustment | `stock: 10`, `adjustQty: 1`, `Damaged Write-off` | `newQuantity: 9`, `adjustment_quantity: -1` | `newQuantity: 9`, audit logged | **Passed** |
 | **WB-ANL-006** | `topRankings` sales percentage | $\text{Segment Completed} \div \text{Total Completed} \times 100$, filtering out `Cancelled` | Women `12,000`, Men `6,000`, Kids `2,000`, Cancelled `25,000` | `60.0%`, `30.0%`, `10.0%` | `60.0%`, `30.0%`, `10.0%` | **Passed** |
+
