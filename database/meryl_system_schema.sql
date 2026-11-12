@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS category (
 -- ============================================
 CREATE TABLE IF NOT EXISTS product (
   product_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  sku VARCHAR(32) UNIQUE,
   product_name VARCHAR(150) NOT NULL,
   brand VARCHAR(100) DEFAULT 'Meryl',
   category_id UUID NOT NULL REFERENCES category(category_id) ON DELETE RESTRICT,

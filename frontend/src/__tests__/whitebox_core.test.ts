@@ -4,6 +4,15 @@
  * Tests internal client-side logic, calculation paths, and boundary conditions.
  */
 import { describe, test, expect } from 'vitest';
+import {
+  normalizeSku,
+  isValidSku,
+  parseSkuNumber,
+  generateNextSku,
+  generateBulkNextSkus,
+  isMatchingSku,
+  formatSkuDisplay,
+} from '../lib/sku';
 
 describe("White-Box Test Suite: Core System Functions", () => {
   // 1. Available Stock Formula
@@ -157,6 +166,283 @@ describe("White-Box Test Suite: Core System Functions", () => {
 
     // After stock-in and configuring threshold: stock is 3, reorder is 5 -> triggers low stock alert
     expect(shouldTriggerLowStock(3, 5)).toBe(true);
+  });
+
+  // 12. SKU Normalization and Validation
+  test("WB-SKU-001: normalizeSku and isValidSku handle case-insensitive trimmed SKUs and reject malformed input", () => {
+    expect(normalizeSku("  ms-000001  ")).toBe("MS-000001");
+    expect(normalizeSku("ms-000125\n")).toBe("MS-000125");
+    expect(normalizeSku(null)).toBe("");
+    expect(normalizeSku(undefined)).toBe("");
+
+    expect(isValidSku("MS-000001")).toBe(true);
+    expect(isValidSku("  ms-000042 ")).toBe(true);
+    expect(isValidSku("")).toBe(false);
+    expect(isValidSku("   ")).toBe(false);
+    expect(isValidSku("INVALID SKU WITH SPACES")).toBe(false);
+
+    expect(parseSkuNumber("MS-000001")).toBe(1);
+    expect(parseSkuNumber("ms-000150")).toBe(150);
+    expect(parseSkuNumber("OTHER-12")).toBeNull();
+    expect(formatSkuDisplay("ms-000009")).toBe("MS-000009");
+  });
+
+  // 13. Sequential Unique SKU Generation per Variant
+  test("WB-SKU-002: generateNextSku and generateBulkNextSkus produce sequential unique SKUs per size/color variant", () => {
+    const existingVariants = [
+      { sku: "MS-000001", product_id: "uuid-1" },
+      { sku: "MS-000002", product_id: "uuid-2" },
+      { sku: "MS-000005", product_id: "uuid-5" },
+    ];
+
+    expect(generateNextSku(existingVariants)).toBe("MS-000006");
+    expect(generateBulkNextSkus(existingVariants, 3)).toEqual([
+      "MS-000006",
+      "MS-000007",
+      "MS-000008",
+    ]);
+  });
+
+  // 14. POS SKU Lookup, Manual Entry, Scanner Enter Input, and Error Handling
+  test("WB-POS-012: POS SKU scan and manual lookup handles valid, repeated, unknown, inactive, expired, out-of-stock, and exceeding stock cases", () => {
+    type Variant = {
+      product_id: string;
+      sku: string;
+      name: string;
+      size: string;
+      color: string;
+      price: number;
+      stock: number;
+      status: "Active" | "Inactive";
+      isArchived?: boolean;
+      isExpired?: boolean;
+    };
+
+    const catalog: Variant[] = [
+      {
+        product_id: "p-active",
+        sku: "MS-000001",
+        name: "Meryl Air Runner",
+        size: "40",
+        color: "Black",
+        price: 1850,
+        stock: 2,
+        status: "Active",
+      },
+      {
+        product_id: "p-inactive",
+        sku: "MS-000002",
+        name: "Meryl Classic Loafer",
+        size: "41",
+        color: "Brown",
+        price: 2100,
+        stock: 5,
+        status: "Inactive",
+      },
+      {
+        product_id: "p-expired",
+        sku: "MS-000003",
+        name: "Meryl Promo Canvas",
+        size: "39",
+        color: "White",
+        price: 1200,
+        stock: 4,
+        status: "Active",
+        isExpired: true,
+      },
+      {
+        product_id: "p-oos",
+        sku: "MS-000004",
+        name: "Meryl Court Pro",
+        size: "42",
+        color: "Red",
+        price: 2400,
+        stock: 0,
+        status: "Active",
+      },
+    ];
+
+    const cart: Array<{ id: string; sku: string; quantity: number; price: number }> = [];
+
+    const processSkuInput = (rawInput: string) => {
+      const normalized = normalizeSku(rawInput);
+      if (!normalized || !isValidSku(normalized)) {
+        return { ok: false, error: "Malformed or empty SKU input" };
+      }
+
+      const matched = catalog.find((item) => isMatchingSku(item.sku, normalized));
+      if (!matched) {
+        return { ok: false, error: `SKU "${normalized}" not found` };
+      }
+
+      if (matched.isArchived || matched.status !== "Active") {
+        return { ok: false, error: `SKU "${matched.sku}" is inactive or archived` };
+      }
+
+      if (matched.isExpired) {
+        return { ok: false, error: `SKU "${matched.sku}" is expired` };
+      }
+
+      if (matched.stock <= 0) {
+        return { ok: false, error: `SKU "${matched.sku}" is out of stock` };
+      }
+
+      const existing = cart.find((c) => c.id === matched.product_id);
+      const nextQty = (existing?.quantity ?? 0) + 1;
+      if (nextQty > matched.stock) {
+        return { ok: false, error: `Requested quantity (${nextQty}) exceeds available stock (${matched.stock})` };
+      }
+
+      if (existing) {
+        existing.quantity = nextQty;
+      } else {
+        cart.push({
+          id: matched.product_id,
+          sku: matched.sku,
+          quantity: 1,
+          price: matched.price,
+        });
+      }
+
+      return { ok: true, item: matched, quantity: nextQty };
+    };
+
+    // 1. Empty / malformed input
+    expect(processSkuInput("   ").ok).toBe(false);
+    expect(processSkuInput("BAD SKU!").ok).toBe(false);
+
+    // 2. Unknown SKU
+    const unknownRes = processSkuInput("MS-999999");
+    expect(unknownRes.ok).toBe(false);
+    expect(unknownRes.error).toContain("not found");
+
+    // 3. Inactive SKU
+    const inactiveRes = processSkuInput("ms-000002");
+    expect(inactiveRes.ok).toBe(false);
+    expect(inactiveRes.error).toContain("inactive");
+
+    // 4. Expired SKU
+    const expiredRes = processSkuInput("MS-000003");
+    expect(expiredRes.ok).toBe(false);
+    expect(expiredRes.error).toContain("expired");
+
+    // 5. Out-of-stock SKU
+    const oosRes = processSkuInput("MS-000004");
+    expect(oosRes.ok).toBe(false);
+    expect(oosRes.error).toContain("out of stock");
+
+    // 6. Successful manual SKU entry (adds 1 unit)
+    const firstScan = processSkuInput("  ms-000001 ");
+    expect(firstScan.ok).toBe(true);
+    expect(cart.length).toBe(1);
+    expect(cart[0].quantity).toBe(1);
+
+    // 7. Repeated scanner-style input (increments existing cart quantity to 2)
+    const secondScan = processSkuInput("MS-000001\n");
+    expect(secondScan.ok).toBe(true);
+    expect(cart.length).toBe(1);
+    expect(cart[0].quantity).toBe(2);
+
+    // 8. Third scan exceeds available stock (stock is 2)
+    const thirdScan = processSkuInput("MS-000001");
+    expect(thirdScan.ok).toBe(false);
+    expect(thirdScan.error).toContain("exceeds available stock");
+    expect(cart[0].quantity).toBe(2);
+  });
+
+  // 15. Damaged Product Stock Adjustment Workflow
+  test("WB-INV-013: damaged stock adjustment reduces sellable quantity and creates full audit record", () => {
+    const processDamagedAdjustment = (params: {
+      product_id: string;
+      sku: string;
+      currentStock: number;
+      adjustQty: number;
+      reason: "Damaged Write-off" | "Quarantined" | "Stock Adjustment";
+      remarks: string;
+      actor: string;
+      retireVariant: boolean;
+    }) => {
+      if (params.adjustQty <= 0) throw new Error("Adjustment quantity must be greater than 0");
+      if (params.adjustQty > params.currentStock) throw new Error("Adjustment exceeds current on-hand stock");
+      if (!params.remarks.trim()) throw new Error("Remarks are required");
+
+      const newQuantity = params.currentStock - params.adjustQty;
+      const nextStatus = params.retireVariant ? "Inactive" : "Active";
+
+      return {
+        newQuantity,
+        nextStatus,
+        inventoryLog: {
+          product_id: params.product_id,
+          sku: params.sku,
+          previous_quantity: params.currentStock,
+          new_quantity: newQuantity,
+          adjustment_quantity: -params.adjustQty,
+          reason: params.reason,
+          remarks: params.remarks.trim(),
+          actor: params.actor,
+        },
+      };
+    };
+
+    const result = processDamagedAdjustment({
+      product_id: "prod-101",
+      sku: "MS-000101",
+      currentStock: 10,
+      adjustQty: 1,
+      reason: "Damaged Write-off",
+      remarks: "Sole separation found during inspection",
+      actor: "admin@merylshoes.com",
+      retireVariant: false,
+    });
+
+    expect(result.newQuantity).toBe(9);
+    expect(result.nextStatus).toBe("Active");
+    expect(result.inventoryLog.adjustment_quantity).toBe(-1);
+    expect(result.inventoryLog.sku).toBe("MS-000101");
+    expect(result.inventoryLog.reason).toBe("Damaged Write-off");
+
+    // Retiring variant marks it Inactive
+    const retired = processDamagedAdjustment({
+      product_id: "prod-101",
+      sku: "MS-000101",
+      currentStock: 9,
+      adjustQty: 9,
+      reason: "Quarantined",
+      remarks: "Batch water damage",
+      actor: "admin@merylshoes.com",
+      retireVariant: true,
+    });
+    expect(retired.newQuantity).toBe(0);
+    expect(retired.nextStatus).toBe("Inactive");
+  });
+
+  // 16. Actual Sales Percentage Formula
+  test("WB-ANL-006: actual sales percentage divides segment completed sales by total completed sales and excludes cancelled transactions", () => {
+    const transactions = [
+      { status: "Completed", department: "Women", units: 6, revenue: 12000 },
+      { status: "Completed", department: "Men", units: 3, revenue: 6000 },
+      { status: "Completed", department: "Kids", units: 1, revenue: 2000 },
+      { status: "Cancelled", department: "Women", units: 10, revenue: 25000 }, // excluded
+    ];
+
+    const completed = transactions.filter((t) => t.status === "Completed");
+    const totalUnits = completed.reduce((sum, t) => sum + t.units, 0);
+    const totalRevenue = completed.reduce((sum, t) => sum + t.revenue, 0);
+
+    const calcPct = (segmentValue: number, totalValue: number) =>
+      totalValue > 0 ? Number(((segmentValue / totalValue) * 100).toFixed(1)) : 0;
+
+    expect(totalUnits).toBe(10);
+    expect(totalRevenue).toBe(20000);
+
+    expect(calcPct(6, totalUnits)).toBe(60.0);
+    expect(calcPct(3, totalUnits)).toBe(30.0);
+    expect(calcPct(1, totalUnits)).toBe(10.0);
+
+    expect(calcPct(12000, totalRevenue)).toBe(60.0);
+    expect(calcPct(6000, totalRevenue)).toBe(30.0);
+    expect(calcPct(2000, totalRevenue)).toBe(10.0);
   });
 });
 

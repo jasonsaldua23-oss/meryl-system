@@ -10,7 +10,7 @@ import { Label } from "./ui/label";
 import { Checkbox } from "./ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
-import { Coins, CreditCard, KeyRound, Minus, Package, Plus, Receipt, Search, ShieldAlert, Trash2, Users } from "lucide-react";
+import { Coins, CreditCard, KeyRound, Minus, Package, Plus, Receipt, Search, ShieldAlert, Trash2, Users, Barcode } from "lucide-react";
 import { toast } from "sonner";
 import { useCustomers, useInventory, useProducts, usePromotions } from "../../lib/hooks";
 import { getRoleGroup, useAuth } from "../../lib/auth-context";
@@ -21,11 +21,13 @@ import { formatStoreDateTime, storeDateDigits, storeToday } from "../../lib/date
 import { isPromotionLive, promotionTargetMatches } from "../../lib/promotion-rules";
 import { exactIlikePattern, findCustomerWithEmail, isValidCustomerEmail, normalizeCustomerEmail } from "../../lib/customer-validation";
 import { normalizeProductDepartment } from "../../lib/product-department";
+import { normalizeSku, isMatchingSku } from "../../lib/sku";
 import merylLogoBw from "../../assets/Meryl_Logo_BW.svg";
 
 type CartItem = {
   id: string;
   product_id: string;
+  sku?: string;
   productName: string;
   brand: string;
   color: string;
@@ -42,6 +44,7 @@ type CartItem = {
 
 type ProductVariant = {
   product_id: string;
+  sku: string;
   product_name: string;
   brand: string;
   category: string;
@@ -385,6 +388,8 @@ export function PointOfSale() {
   const [productSearch, setProductSearch] = useState("");
   const [modalCategoryFilter, setModalCategoryFilter] = useState("All");
   const [customerSearch, setCustomerSearch] = useState("");
+  const [skuInput, setSkuInput] = useState("");
+  const skuInputRef = useRef<HTMLInputElement | null>(null);
 
   const customers = (customersQuery.data as any[]) ?? [];
   const customerOptions = useMemo(
@@ -444,6 +449,7 @@ export function PointOfSale() {
 
       variants.push({
         product_id: row.product_id,
+        sku: String(row.sku ?? "").trim(),
         product_name: row.product_name ?? "Unnamed Product",
         brand: row.brand ?? "N/A",
         category: row.category?.[0]?.category_name ?? row.category?.category_name ?? "N/A",
@@ -889,6 +895,7 @@ export function PointOfSale() {
                 ? `${selectedVariant.product_id}:bogo:${matchedPromotion?.promoKey ?? "promo"}:${Date.now()}`
                 : selectedVariant.product_id,
               product_id: selectedVariant.product_id,
+              sku: selectedVariant.sku,
               productName: selectedVariant.product_name,
               brand: selectedVariant.brand,
               color: selectedVariant.color,
@@ -975,6 +982,60 @@ export function PointOfSale() {
     if (!added) return;
     setIsProductGridOpen(false);
     setProductSearch("");
+  };
+
+  const handleSkuScanOrEntry = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const raw = skuInput.trim();
+    if (!raw) {
+      toast.error("Please scan a barcode or enter a SKU.");
+      skuInputRef.current?.focus();
+      return;
+    }
+
+    const querySku = normalizeSku(raw);
+
+    // Look up across all variants in catalog for precise diagnostics
+    const match = productInventory.find(
+      (v) =>
+        isMatchingSku(v.sku, querySku) ||
+        (v.product_id && v.product_id.toLowerCase() === raw.toLowerCase()),
+    );
+
+    if (!match) {
+      toast.error(`SKU "${raw}" not found in product database.`);
+      skuInputRef.current?.select();
+      return;
+    }
+
+    if (match.status === "Inactive") {
+      toast.error(`Product "${match.product_name}" (${match.sku || raw}) is inactive or archived.`);
+      skuInputRef.current?.select();
+      return;
+    }
+
+    if (match.status === "Expired") {
+      toast.error(`Product "${match.product_name}" (${match.sku || raw}) is expired and cannot be sold.`);
+      skuInputRef.current?.select();
+      return;
+    }
+
+    if (match.stock_quantity <= 0) {
+      toast.error(`Product "${match.product_name}" (${match.sku || raw}) is currently out of stock.`);
+      skuInputRef.current?.select();
+      return;
+    }
+
+    const added = addVariantToCart(match, 1);
+    if (added) {
+      setSkuInput("");
+      // Keep focus on input for fast rapid scanning (USB scanner or keyboard)
+      setTimeout(() => {
+        skuInputRef.current?.focus();
+      }, 50);
+    } else {
+      skuInputRef.current?.select();
+    }
   };
 
   const requestManagerApproval = (description: string, action: () => void) => {
@@ -1611,6 +1672,43 @@ function formatReceiptNumber(salesId?: string) {
 
             {/* PRODUCT, COLOR & SHOPEE-STYLE SIZE SELECTION */}
             <div className="space-y-4">
+              {/* 0. BARCODE SCANNER / MANUAL SKU ENTRY BAR */}
+              <form
+                onSubmit={handleSkuScanOrEntry}
+                className="rounded-xl bg-[#14141f] border border-[#2c2c3d] p-3.5 shadow-inner space-y-2"
+              >
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="skuScanInput" className="text-xs font-bold text-yellow-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <Barcode className="w-4 h-4 text-yellow-400" />
+                    Scan or enter SKU
+                  </Label>
+                  <span className="text-[11px] text-zinc-400 hidden sm:inline">
+                    USB scanner or keyboard entry • Press Enter
+                  </span>
+                </div>
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <Barcode className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-yellow-400/70" />
+                    <Input
+                      id="skuScanInput"
+                      ref={skuInputRef}
+                      type="text"
+                      value={skuInput}
+                      onChange={(e) => setSkuInput(e.target.value)}
+                      placeholder="Scan barcode or type SKU (e.g. MS-000001)..."
+                      className="h-10 bg-[#1c1c28] border-[#343447] pl-10 pr-4 text-white font-mono text-sm placeholder:text-zinc-500 focus-visible:ring-yellow-400/50 rounded-xl"
+                      autoComplete="off"
+                    />
+                  </div>
+                  <Button
+                    type="submit"
+                    className="bg-yellow-400 text-red-950 hover:bg-yellow-500 font-bold text-xs h-10 px-4 rounded-xl shadow shrink-0"
+                  >
+                    Add to Cart
+                  </Button>
+                </div>
+              </form>
+
               {/* 1. SELECT PRODUCT DROPDOWN */}
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold text-yellow-300 uppercase tracking-wider">
@@ -1867,7 +1965,12 @@ function formatReceiptNumber(salesId?: string) {
                                   <Package className="w-4 h-4 text-yellow-400/40" />
                                 )}
                               </div>
-                              <span className="truncate">{item.productName}</span>
+                              <div className="flex flex-col min-w-0">
+                                <span className="truncate">{item.productName}</span>
+                                {item.sku && (
+                                  <span className="font-mono text-[10px] text-yellow-300/70">{item.sku}</span>
+                                )}
+                              </div>
                             </div>
                           </TableCell>
                           <TableCell className="text-yellow-100 whitespace-nowrap align-middle px-3 py-3 truncate">{item.brand}</TableCell>

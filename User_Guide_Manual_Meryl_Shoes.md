@@ -1206,21 +1206,42 @@ Allows inventory custodians to update their account credentials and log out of t
 
 ---
 
-### Section 4.6: Panel Recommendations – SKU, Barcode, Damaged Stock & Sales Percentages
-#### Implementation Concept
-The recommended revision connects product identification, POS checkout, inventory control, and analytics in one traceable flow.
+### Section 4.6: Panel Recommendations – SKU, Barcode Scanning, Label Generation, Damaged Stock & Sales Percentages
+#### Implementation Concept & Operational Standards
+The implemented workflow connects product variant identification, POS checkout, inventory control, barcode label printing, and analytics in one traceable, audit-verified flow:
 
-* Every active sellable size/color variant receives one permanent unique SKU.
-* The SKU is the value encoded in a Code 128 barcode label.
-* During development, staff can type the SKU and press **Enter** in the POS **Scan or enter SKU** field. A plug-and-play USB scanner can be connected later because it sends the same keyboard input automatically.
-* The POS performs an exact SKU lookup, checks the product status and available stock, and adds or increments the matching variant in the cart.
-* Archived, inactive, expired, and unavailable variants remain in the database for history but cannot be added to a new sale.
+* **One Variant = One Permanent SKU = One Barcode**: Every exact size/color variant receives a permanent, sequential SKU (`MS-000001`, `MS-000002`, etc.) stored in `public.product.sku` (`VARCHAR(32)`) and enforced by a case-insensitive trimmed unique index (`idx_product_sku_unique`). Different sizes or colors of the same shoe never share a SKU, and the SKU remains stable even when the product name, price, category, color, or size is edited. `product_id` (UUID) remains the relational primary/foreign key for `inventory` and `sales_details`.
+* **Complete SKU Display & Copy Action**: Both **Product List** and **Product Settings** display the full, untruncated SKU alongside a one-click **Copy SKU** button so staff can verify or paste the complete identifier without ambiguity.
+* **Manual SKU Entry & Plug-and-Play USB Scanner Support**: In the POS product-selection panel, the **`Scan or enter SKU`** input field accepts manually typed SKU values (followed by **Enter** or clicking **Add SKU**) as well as plug-and-play USB barcode scanners, which behave as standard HID keyboards sending the scanned SKU followed by `Enter`. No proprietary scanner driver is required.
+* **Authoritative POS Lookup & Error Handling**: Pressing **Enter** trims whitespace, normalizes case, and performs an exact SKU lookup. When a valid active SKU is found, the POS identifies the exact variant, verifies available stock, applies current pricing and active promotions, adds 1 unit to the cart (or increments the existing cart line on repeated scans), clears the input, and returns focus for the next scan. Clear validation messages prevent adding invalid items for:
+  - *SKU not found*
+  - *Inactive or archived product*
+  - *Expired product*
+  - *Out-of-stock product*
+  - *Requested quantity exceeding available stock*
+  - *Malformed or empty input*
+* **Code 128 Internal Store Barcode Labels**: Clicking the **Print Barcode Label** button in Product List, Product Settings, or Inventory opens the **Barcode Label Generator Modal**, which renders a **Code 128** barcode (via `JsBarcode`) containing:
+  - **MERYL SHOES** store header
+  - Product name & brand
+  - Color & EU size
+  - Retail selling price (SRP)
+  - Scannable Code 128 barcode encoding the exact SKU
+  - Human-readable SKU text below the barcode
+  *(Note: Code 128 is used for internal store labels rather than EAN-13, which requires officially registered GS1 country/company prefixes).*
 
-#### Damaged Product Rule
-When one pair is damaged, the system reduces the sellable quantity and creates an Inventory Log entry with the reason **Damaged Write-off** or **Quarantined**. The entire product variant is marked inactive only when it is fully retired or no longer offered. Each adjustment records the SKU, old quantity, new quantity, reason, remarks, staff member, and timestamp.
+#### Damaged Product Stock Adjustment Rules
+When one or more pairs are found defective or damaged, authorized staff click **Record Damaged Stock** (shield-alert icon in Product Settings) to open the **Damaged / Quarantined Stock Adjustment Modal**:
+1. Select the adjustment reason: **`Damaged Write-off`**, **`Quarantined`**, or **`Stock Adjustment`**.
+2. Enter the **Damaged / Adjusted Quantity** (validated between `1` and current on-hand stock) and mandatory **Inspection Remarks**.
+3. The system reduces the sellable `stock_quantity` in `inventory`, creates a negative `adjustment` record in `inventory_log`, and writes a complete security audit event (`STOCK_DAMAGED_ADJUSTMENT`) recording:
+   - `product_id` and `SKU`
+   - `previous_quantity`, `new_quantity`, and `adjustment_quantity`
+   - `reason` and `remarks`
+   - `actor` (authenticated user) and `timestamp`
+4. A single damaged pair only reduces sellable stock; the complete product variant is marked **Inactive** only when the staff member explicitly checks the option to retire the entire variant.
 
-#### Actual Sales Percentage
-Sales percentages are calculated from completed transaction data using the selected date range and metric:
+#### Actual Sales Percentage Formula
+Analytics rankings and category/department breakdowns calculate sales percentages strictly from **completed actual sales data** within the active date range and selected metric (`units` or `revenue`):
 
 ```text
 Sales percentage = segment completed revenue or units
@@ -1228,5 +1249,6 @@ Sales percentage = segment completed revenue or units
                    × 100
 ```
 
-Cancelled sales and fully returned quantities are excluded. The calculation refreshes whenever the user changes the date range or report filter.
+Cancelled, voided, refunded, and fully returned quantities are excluded from the numerator and denominator, and percentages dynamically recalculate whenever date ranges or filters change.
+
 

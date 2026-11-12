@@ -257,6 +257,7 @@ export type Database = {
           product_name: string
           reorder_level: number | null
           size: string | null
+          sku: string | null
           status: string | null
           updated_at: string | null
         }
@@ -270,6 +271,7 @@ export type Database = {
           product_name: string
           reorder_level?: number | null
           size?: string | null
+          sku?: string | null
           status?: string | null
           updated_at?: string | null
         }
@@ -283,6 +285,7 @@ export type Database = {
           product_name?: string
           reorder_level?: number | null
           size?: string | null
+          sku?: string | null
           status?: string | null
           updated_at?: string | null
         }

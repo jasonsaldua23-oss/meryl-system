@@ -8,15 +8,19 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogT
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
 import { Badge } from "./ui/badge";
-import { Archive, Edit, Eye, Info, Package, Plus, Search, Settings, Warehouse, SlidersHorizontal, ArrowUpDown, CheckCircle2, AlertTriangle, Layers, TrendingUp, DollarSign, X, Check, Filter, Upload } from "lucide-react";
+import { Archive, Edit, Eye, Info, Package, Plus, Search, Settings, Warehouse, SlidersHorizontal, ArrowUpDown, CheckCircle2, AlertTriangle, Layers, TrendingUp, DollarSign, X, Check, Filter, Upload, Barcode, Copy, Tag, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
 import { useCategories, useInventory, useProducts, useProductsMutations } from "../../lib/hooks";
+import { useAuth } from "../../lib/auth-context";
 import { supabase } from "../../lib/supabase";
 import { logAuditEvent } from "../../lib/api/audit-logger";
 import { cleanProductImageUrl, getWebpageUrlWarning } from "../../lib/image-utils";
 import { TablePagination } from "./ui/table-pagination";
 import { storeToday } from "../../lib/datetime";
 import { normalizeProductDepartment, PRODUCT_DEPARTMENTS } from "../../lib/product-department";
+import { generateNextSku, generateBulkNextSkus, formatSkuDisplay } from "../../lib/sku";
+import { BarcodeLabelModal } from "./BarcodeLabelModal";
+import { DamagedStockModal } from "./DamagedStockModal";
 
 type InventoryStatus = "Active" | "Inactive";
 type ProductTab = "list" | "settings" | "inventory";
@@ -267,6 +271,10 @@ export function ProductManagement({ view, onViewChange }: ProductManagementProps
   const [stockForm, setStockForm] = useState<StockFormData>(defaultStockForm);
   const [showArchived, setShowArchived] = useState(false);
 
+  const { user } = useAuth();
+  const [barcodeProduct, setBarcodeProduct] = useState<UiProduct | null>(null);
+  const [damagedProduct, setDamagedProduct] = useState<UiProduct | null>(null);
+
   const productsQuery = useProducts();
   const inventoryQuery = useInventory();
   const categoriesQuery = useCategories();
@@ -516,7 +524,9 @@ export function ProductManagement({ view, onViewChange }: ProductManagementProps
     if (!sizes.length) return toast.error("Those sizes already exist for this shoe.");
     const color = product.color && product.color !== "Default" ? product.color : null;
     const gender = product.gender && product.gender !== "N/A" ? product.gender : null;
-    const rows = sizes.map((size) => ({
+    const generatedSkus = generateBulkNextSkus(products, sizes.length);
+    const rows = sizes.map((size, idx) => ({
+      sku: generatedSkus[idx],
       product_name: product.name,
       brand: product.brand === "N/A" ? null : product.brand,
       category_id: product.category_id,
@@ -600,6 +610,7 @@ export function ProductManagement({ view, onViewChange }: ProductManagementProps
 
     const thisVariantPayload: any = {
       ...basePayload,
+      sku: editingProduct && editingProduct.sku ? editingProduct.sku : generateNextSku(products),
       size: productForm.size.trim() || null,
       color: productForm.color.trim() || null,
       gender: productForm.gender || null,
@@ -975,6 +986,8 @@ export function ProductManagement({ view, onViewChange }: ProductManagementProps
           setStockForm={setStockForm}
           selectedProduct={selectedSettingsProduct}
           onSave={saveProductSettings}
+          onPrintBarcode={(p) => setBarcodeProduct(p)}
+          onDamagedStock={(p) => setDamagedProduct(p)}
         />
       ) : (
         <Card className="bg-[#15151D] border-[#24242F]">
@@ -1245,9 +1258,19 @@ export function ProductManagement({ view, onViewChange }: ProductManagementProps
             )}
 
             {activeTab === "list" ? (
-              <ProductListTable products={paginatedProducts} onEdit={openEditProduct} onConfigure={openSettingsForProduct} onAddSizes={openAddSizes} />
+              <ProductListTable
+                products={paginatedProducts}
+                onEdit={openEditProduct}
+                onConfigure={openSettingsForProduct}
+                onAddSizes={openAddSizes}
+                onPrintBarcode={(p) => setBarcodeProduct(p)}
+              />
             ) : (
-              <InventoryTable products={paginatedProducts} onConfigure={openSettingsForProduct} />
+              <InventoryTable
+                products={paginatedProducts}
+                onConfigure={openSettingsForProduct}
+                onPrintBarcode={(p) => setBarcodeProduct(p)}
+              />
             )}
 
             <Dialog open={Boolean(addSizesFor)} onOpenChange={(open) => { if (!open && !isAddingSizes) setAddSizesFor(null); }}>
@@ -1318,6 +1341,27 @@ export function ProductManagement({ view, onViewChange }: ProductManagementProps
           </CardContent>
         </Card>
       )}
+
+      {barcodeProduct && (
+        <BarcodeLabelModal
+          isOpen={!!barcodeProduct}
+          onClose={() => setBarcodeProduct(null)}
+          product={barcodeProduct}
+        />
+      )}
+
+      {damagedProduct && (
+        <DamagedStockModal
+          isOpen={!!damagedProduct}
+          onClose={() => setDamagedProduct(null)}
+          product={damagedProduct}
+          user={user}
+          onSuccess={() => {
+            queryClient.invalidateQueries({ queryKey: ["products"] });
+            queryClient.invalidateQueries({ queryKey: ["inventory"] });
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1335,7 +1379,19 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
   );
 }
 
-function ProductListTable({ products, onEdit, onConfigure, onAddSizes }: { products: UiProduct[]; onEdit: (product: UiProduct) => void; onConfigure?: (product: UiProduct) => void; onAddSizes?: (product: UiProduct) => void }) {
+function ProductListTable({
+  products,
+  onEdit,
+  onConfigure,
+  onAddSizes,
+  onPrintBarcode,
+}: {
+  products: UiProduct[];
+  onEdit: (product: UiProduct) => void;
+  onConfigure?: (product: UiProduct) => void;
+  onAddSizes?: (product: UiProduct) => void;
+  onPrintBarcode?: (product: UiProduct) => void;
+}) {
   return (
     <div className="border border-[#24242F] rounded-xl overflow-x-auto bg-[#111118]">
       <Table className="w-full min-w-[1040px]">
@@ -1352,7 +1408,27 @@ function ProductListTable({ products, onEdit, onConfigure, onAddSizes }: { produ
               <TableCell className="text-center align-middle py-2 px-3">
                 <ProductThumbnail src={product.image_url} alt={product.name} />
               </TableCell>
-              <TableCell className="text-yellow-200 text-center whitespace-nowrap font-mono" title={product.sku}>{shortId(product.sku)}</TableCell>
+              <TableCell className="text-yellow-200 text-center whitespace-nowrap font-mono text-xs" title={product.sku}>
+                <div className="inline-flex items-center gap-1.5">
+                  <span className="font-semibold text-yellow-300">{product.sku || "—"}</span>
+                  {product.sku && (
+                    <button
+                      type="button"
+                      title="Copy SKU"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigator.clipboard?.writeText(product.sku).then(
+                          () => toast.success(`SKU ${product.sku} copied`),
+                          () => toast.error("Could not copy SKU")
+                        );
+                      }}
+                      className="p-1 rounded text-zinc-400 hover:text-yellow-300 hover:bg-zinc-800 transition"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </TableCell>
               <TableCell className="text-yellow-200 text-center whitespace-nowrap">
                 <span>{product.name}</span>
               </TableCell>
@@ -1375,6 +1451,11 @@ function ProductListTable({ products, onEdit, onConfigure, onAddSizes }: { produ
                       <Settings className="w-4 h-4" />
                     </Button>
                   )}
+                  {onPrintBarcode && (
+                    <Button size="sm" variant="ghost" title="Print Barcode Label" className="text-yellow-400 hover:bg-zinc-800" onClick={() => onPrintBarcode(product)}>
+                      <Barcode className="w-4 h-4" />
+                    </Button>
+                  )}
                 </div>
               </TableCell>
             </TableRow>
@@ -1385,7 +1466,15 @@ function ProductListTable({ products, onEdit, onConfigure, onAddSizes }: { produ
   );
 }
 
-function InventoryTable({ products, onConfigure }: { products: UiProduct[]; onConfigure: (product: UiProduct) => void }) {
+function InventoryTable({
+  products,
+  onConfigure,
+  onPrintBarcode,
+}: {
+  products: UiProduct[];
+  onConfigure: (product: UiProduct) => void;
+  onPrintBarcode?: (product: UiProduct) => void;
+}) {
   const [selectedProduct, setSelectedProduct] = useState<UiProduct | null>(null);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
 
@@ -1451,6 +1540,11 @@ function InventoryTable({ products, onConfigure }: { products: UiProduct[]; onCo
                     <Button size="sm" variant="ghost" title="Product settings" className="text-yellow-400 hover:bg-zinc-800" onClick={() => onConfigure(product)}>
                       <Settings className="w-4 h-4" />
                     </Button>
+                    {onPrintBarcode && (
+                      <Button size="sm" variant="ghost" title="Print Barcode Label" className="text-yellow-400 hover:bg-zinc-800" onClick={() => onPrintBarcode(product)}>
+                        <Barcode className="w-4 h-4" />
+                      </Button>
+                    )}
                   </div>
                 </TableCell>
               </TableRow>
@@ -1550,7 +1644,7 @@ function InventoryTable({ products, onConfigure }: { products: UiProduct[]; onCo
                   <div className="flex items-center justify-between gap-3 py-2.5">
                     <dt className="text-zinc-400">SKU</dt>
                     <dd className="flex items-center gap-2 font-mono text-xs text-zinc-200">
-                      <span title={selectedProduct.sku}>{shortId(selectedProduct.sku, 8, 4)}</span>
+                      <span className="font-semibold text-yellow-300" title={selectedProduct.sku}>{selectedProduct.sku}</span>
                       <button
                         type="button"
                         onClick={() => {
@@ -1559,8 +1653,9 @@ function InventoryTable({ products, onConfigure }: { products: UiProduct[]; onCo
                             () => toast.error("Could not copy SKU"),
                           );
                         }}
-                        className="rounded border border-[#34344a] px-1.5 py-0.5 font-sans text-[10px] text-yellow-300 hover:bg-[#262636]"
+                        className="rounded border border-[#34344a] px-1.5 py-0.5 font-sans text-[10px] text-yellow-300 hover:bg-[#262636] flex items-center gap-1"
                       >
+                        <Copy className="w-3 h-3" />
                         Copy
                       </button>
                     </dd>
@@ -1594,6 +1689,8 @@ function ProductSettingsPage({
   setStockForm,
   selectedProduct,
   onSave,
+  onPrintBarcode,
+  onDamagedStock,
 }: {
   products: UiProduct[];
   categories: any[];
@@ -1601,6 +1698,8 @@ function ProductSettingsPage({
   setStockForm: (data: StockFormData) => void;
   selectedProduct?: UiProduct;
   onSave: () => void;
+  onPrintBarcode?: (product: UiProduct) => void;
+  onDamagedStock?: (product: UiProduct) => void;
 }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("all");
@@ -1902,7 +2001,24 @@ function ProductSettingsPage({
                         {/* Product & SKU */}
                         <TableCell className="py-3">
                           <p className="font-semibold text-white text-sm">{product.name}</p>
-                          <span className="text-xs text-yellow-200/50 font-mono">{shortId(product.sku)}</span>
+                          <div className="flex items-center gap-1.5 mt-0.5">
+                            <span className="text-xs text-yellow-300 font-mono font-medium">{product.sku || "—"}</span>
+                            {product.sku && (
+                              <button
+                                type="button"
+                                title="Copy SKU"
+                                onClick={() => {
+                                  navigator.clipboard?.writeText(product.sku).then(
+                                    () => toast.success(`SKU ${product.sku} copied`),
+                                    () => toast.error("Could not copy SKU")
+                                  );
+                                }}
+                                className="p-0.5 rounded text-zinc-400 hover:text-yellow-300 hover:bg-zinc-800 transition"
+                              >
+                                <Copy className="w-3 h-3" />
+                              </button>
+                            )}
+                          </div>
                         </TableCell>
 
                         {/* Brand & Category */}
@@ -1971,14 +2087,39 @@ function ProductSettingsPage({
 
                         {/* Action */}
                         <TableCell className="text-center">
-                          <Button
-                            size="sm"
-                            onClick={() => handleOpenConfigure(product)}
-                            className="bg-yellow-400 text-red-900 hover:bg-yellow-500 font-semibold text-xs h-8 px-3 rounded-lg shadow flex items-center gap-1.5 mx-auto transition-transform active:scale-95"
-                          >
-                            <SlidersHorizontal className="w-3.5 h-3.5" />
-                            <span>Configure</span>
-                          </Button>
+                          <div className="flex items-center justify-center gap-1.5">
+                            <Button
+                              size="sm"
+                              onClick={() => handleOpenConfigure(product)}
+                              className="bg-yellow-400 text-red-900 hover:bg-yellow-500 font-semibold text-xs h-8 px-2.5 rounded-lg shadow flex items-center gap-1.5 transition-transform active:scale-95"
+                              title="Configure stock & pricing"
+                            >
+                              <SlidersHorizontal className="w-3.5 h-3.5" />
+                              <span>Configure</span>
+                            </Button>
+                            {onPrintBarcode && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => onPrintBarcode(product)}
+                                className="border-[#34344a] text-yellow-300 hover:bg-zinc-800 h-8 px-2"
+                                title="Print Barcode Label"
+                              >
+                                <Barcode className="w-4 h-4" />
+                              </Button>
+                            )}
+                            {onDamagedStock && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => onDamagedStock(product)}
+                                className="border-[#34344a] text-red-400 hover:bg-red-950/40 hover:text-red-300 h-8 px-2"
+                                title="Record Damaged / Quarantined Stock"
+                              >
+                                <ShieldAlert className="w-4 h-4" />
+                              </Button>
+                            )}
+                          </div>
                         </TableCell>
                       </TableRow>
                     );
@@ -2062,6 +2203,27 @@ function ProductSettingsPage({
                       <p className="text-xs text-yellow-200/70">
                         Color: {activeProduct.color} &nbsp;|&nbsp; Size: {activeProduct.size} &nbsp;|&nbsp; Department: {activeProduct.gender}
                       </p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className="text-xs text-zinc-400 font-medium">SKU:</span>
+                        <span className="text-xs font-mono font-bold text-yellow-300 bg-[#222232] px-2 py-0.5 rounded border border-[#333348]">
+                          {activeProduct.sku || "—"}
+                        </span>
+                        {activeProduct.sku && (
+                          <button
+                            type="button"
+                            title="Copy SKU"
+                            onClick={() => {
+                              navigator.clipboard?.writeText(activeProduct.sku).then(
+                                () => toast.success(`SKU ${activeProduct.sku} copied`),
+                                () => toast.error("Could not copy SKU")
+                              );
+                            }}
+                            className="p-1 rounded text-zinc-400 hover:text-yellow-300 hover:bg-[#252536] transition"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                   <div className="sm:text-right border-t sm:border-t-0 border-[#2b2b3d] pt-2 sm:pt-0">
@@ -2264,22 +2426,48 @@ function ProductSettingsPage({
           </div>
 
           {/* MODAL FOOTER */}
-          <DialogFooter className="border-t border-[#232332] bg-[#181824] px-6 py-4 flex items-center justify-end gap-3 flex-shrink-0">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setIsConfigDialogOpen(false)}
-              className="h-10 border-[#38384a] bg-transparent text-yellow-200 hover:bg-[#252533] rounded-lg px-5 text-xs font-medium"
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={handleSaveModal}
-              disabled={isSaving}
-              className="h-10 bg-yellow-400 text-red-950 hover:bg-yellow-500 font-bold px-6 rounded-lg shadow-lg disabled:opacity-60 text-xs"
-            >
-              {isSaving ? "Saving..." : "Save Parameters"}
-            </Button>
+          <DialogFooter className="border-t border-[#232332] bg-[#181824] px-6 py-4 flex flex-wrap items-center justify-between gap-3 flex-shrink-0">
+            <div className="flex items-center gap-2">
+              {activeProduct && onPrintBarcode && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => onPrintBarcode(activeProduct)}
+                  className="h-9 border-[#38384a] bg-transparent text-yellow-300 hover:bg-[#252533] rounded-lg px-3.5 text-xs font-medium"
+                >
+                  <Barcode className="w-4 h-4 mr-1.5" />
+                  Print Barcode Label
+                </Button>
+              )}
+              {activeProduct && onDamagedStock && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => onDamagedStock(activeProduct)}
+                  className="h-9 border-red-900/60 bg-red-950/20 text-red-400 hover:bg-red-950/50 hover:text-red-300 rounded-lg px-3.5 text-xs font-medium"
+                >
+                  <ShieldAlert className="w-4 h-4 mr-1.5" />
+                  Record Damaged Stock
+                </Button>
+              )}
+            </div>
+            <div className="flex items-center gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setIsConfigDialogOpen(false)}
+                className="h-10 border-[#38384a] bg-transparent text-yellow-200 hover:bg-[#252533] rounded-lg px-5 text-xs font-medium"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleSaveModal}
+                disabled={isSaving}
+                className="h-10 bg-yellow-400 text-red-950 hover:bg-yellow-500 font-bold px-6 rounded-lg shadow-lg disabled:opacity-60 text-xs"
+              >
+                {isSaving ? "Saving..." : "Save Parameters"}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -2880,7 +3068,7 @@ function VariantUpdateScope({
                   className="h-4 w-4 accent-yellow-400"
                 />
                 <span className="text-xs">
-                  {variant.color} / {variant.size} ({shortId(variant.sku)})
+                  {variant.color} / {variant.size} <span className="font-mono text-yellow-300">({variant.sku})</span>
                 </span>
               </label>
             ))}
@@ -2928,7 +3116,7 @@ function ProductSizeCard({ product, isSelected, onSelect }: { product: UiProduct
       <div className="mt-3 space-y-1 text-xs">
         <p className="truncate font-semibold">{product.color || "No color set"}</p>
         <div className={`flex items-center justify-between gap-2 ${isSelected ? "text-red-950/70" : "text-yellow-200/50"}`}>
-          <span className="truncate">{shortId(product.sku)}</span>
+          <span className="truncate font-mono">{product.sku}</span>
           <span className="shrink-0 font-semibold">{formatMoney(product.unit_price)}</span>
         </div>
       </div>

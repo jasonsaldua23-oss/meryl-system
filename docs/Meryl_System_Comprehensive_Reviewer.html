@@ -284,23 +284,23 @@ Future revenue and unit projections</div>
   <h3>Best upgrades</h3>
   <ol><li>Persist each forecast before the predicted period.</li><li>Calculate MAE, RMSE, WAPE, and bias.</li><li>Compare against naive and seasonal-naive baselines.</li><li>Learn scenario ranges from residuals.</li><li>Add stockout, weekday, promotion, and seasonal indicators.</li><li>Separate baseline demand from promotional lift.</li></ol>
 
-  <h2 id="panel-recommendations" class="page-break">10. Panel recommendations and implementation concept</h2>
-  <p>The panel recommendations strengthen the existing POS and inventory workflow. They should be implemented as one traceable flow: product master data creates a variant SKU, the POS identifies that variant, inventory validates the available quantity, and every adjustment is recorded for reporting and audit.</p>
-  <h3>10.1 Include every sellable product variant in the POS</h3>
-  <p>The POS catalog should include every active, sellable product variant, including each size and color. Archived, inactive, expired, or zero-available variants should remain in the database for history but should not be selectable for a new sale. The manual product search remains available as a fallback.</p>
-  <h3>10.2 Barcode-compatible SKU identification</h3>
-  <p>Each product variant should have one permanent unique SKU. The SKU is encoded in a Code 128 barcode label. A USB scanner is optional during development because a scanner behaves like a keyboard: staff can type the SKU into the same <code>Scan or enter SKU</code> field and press Enter. When the scanner is connected later, the same field and lookup logic work without a new checkout design.</p>
-  <div class="formula">SKU input → exact product variant lookup → status and stock check → add or increment cart quantity</div>
-  <p>The database UUID remains the relational key. The SKU is the human-readable operational identifier. It must remain unique and stable even if the product name, price, or category changes.</p>
-  <h3>10.3 Damaged-product handling</h3>
-  <p>A damaged individual pair should reduce sellable quantity and create a stock movement with the reason <code>Damaged Write-off</code> or <code>Quarantined</code>. The product variant should be marked inactive only when the entire variant is retired, unsafe, or no longer offered. This prevents a single damaged pair from hiding all remaining good stock.</p>
-  <p>The adjustment should record product ID, SKU, quantity, previous quantity, new quantity, reason, remarks, actor, and timestamp. The movement must be auditable and must not be silently edited from the POS.</p>
-  <h3>10.4 Sales percentage from actual data</h3>
-  <p>Sales percentages must be calculated from completed transaction records rather than hard-coded values or the number of products displayed. For a product, department, or promotion:</p>
-  <div class="formula">Sales percentage = completed units or revenue for the segment ÷ completed units or revenue for the selected period × 100</div>
-  <p>The denominator must use the same date range, completion status, return treatment, and metric as the numerator. Cancelled transactions and fully returned quantities are excluded. The result should be recalculated when filters or date ranges change.</p>
-  <h3>Recommended delivery order</h3>
-  <ol><li>Add a unique SKU field and backfill every existing product variant.</li><li>Add exact SKU lookup to the POS and keep manual search as fallback.</li><li>Generate and print Code 128 labels with the SKU below the barcode.</li><li>Add authorized damaged-stock adjustment with an audit reason.</li><li>Calculate sales percentages from completed sales and show the selected denominator.</li><li>Test repeated scans, unknown SKUs, archived items, stockouts, damaged write-offs, and concurrent checkout.</li></ol>
+  <h2 id="panel-recommendations" class="page-break">10. Panel recommendations and implemented architecture</h2>
+  <p>The panel recommendations are implemented as one traceable workflow: product master data creates a permanent variant SKU, the POS identifies that variant via barcode scan or manual SKU entry, inventory validates the available quantity, and every stock adjustment is recorded for reporting and audit.</p>
+  <h3>10.1 One variant = one permanent SKU = one barcode</h3>
+  <p>Every active, sellable product variant (exact combination of model, color, and EU size) receives its own permanent sequential SKU (<code>MS-000001</code>, <code>MS-000002</code>, etc.) stored in <code>public.product.sku</code> (<code>VARCHAR(32)</code>) and enforced by a case-insensitive trimmed unique index (<code>idx_product_sku_unique</code>) and auto-generation trigger (<code>trg_product_generate_sku</code>). Different sizes of the same shoe never share a SKU. Both Product List and Product Settings display the complete, untruncated SKU with a Copy-SKU action. Archived, inactive, expired, or zero-available variants remain in the database for history but cannot be added to a new sale.</p>
+  <h3>10.2 Barcode-compatible SKU identification &amp; Code 128 labels</h3>
+  <p>Each variant's SKU is encoded in a <strong>Code 128</strong> internal store barcode label (generated via <code>BarcodeLabelModal.tsx</code> using <code>JsBarcode</code>, printing store header, product name, brand, color, size, SRP price, scannable barcode, and human-readable SKU text below). Code 128 is the recommended internal barcode format because EAN-13 requires officially registered GS1 company prefixes. Manual SKU entry works immediately without a physical scanner: staff type the SKU into the POS <code>Scan or enter SKU</code> field and press Enter. When a USB barcode scanner is connected later, it operates plug-and-play as standard HID keyboard input sending the scanned SKU followed by Enter. Manual product search remains available as a fallback.</p>
+  <div class="formula">SKU input → trim &amp; uppercase normalization → exact product variant lookup → status, expiry &amp; stock check → add 1 unit or increment cart quantity</div>
+  <p>The database <code>product_id</code> UUID remains the relational primary/foreign key for <code>inventory</code> and <code>sales_details</code>, while <code>sku</code> is the permanent operational identifier that remains stable even if the product name, price, category, color, or size changes.</p>
+  <h3>10.3 Damaged-product handling rules</h3>
+  <p>Through <code>DamagedStockModal.tsx</code>, a damaged individual pair reduces the sellable quantity in <code>inventory.stock_quantity</code> and creates an <code>inventory_log</code> movement (<code>adjustment</code>, negative quantity) with the reason <code>Damaged Write-off</code>, <code>Quarantined</code>, or <code>Stock Adjustment</code>. The product variant is marked inactive only when the entire variant is retired or no longer offered. This prevents a single damaged pair from hiding all remaining good stock.</p>
+  <p>Every adjustment records <code>product_id</code>, <code>SKU</code>, <code>previous_quantity</code>, <code>new_quantity</code>, <code>adjustment_quantity</code>, <code>reason</code>, <code>remarks</code>, <code>actor</code>, and <code>timestamp</code> in both the inventory log and security audit trail (<code>STOCK_DAMAGED_ADJUSTMENT</code>).</p>
+  <h3>10.4 Actual sales percentage formula</h3>
+  <p>Sales percentages are calculated strictly from completed actual sales records rather than hard-coded values or the number of products displayed. For a product, category, department, or promotion:</p>
+  <div class="formula">Sales percentage = segment completed revenue or units ÷ total completed revenue or units × 100</div>
+  <p>The denominator uses the exact same selected date range, completion status, and metric as the numerator. Cancelled, voided, refunded, and fully returned quantities are excluded, and percentages dynamically recalculate whenever filters or date ranges change.</p>
+  <h3>Implemented delivery summary</h3>
+  <ol><li>Database migration <code>database/add_sku_and_barcode_scanning.sql</code> adds <code>sku VARCHAR(32)</code>, backfills sequential <code>MS-000001</code> SKUs, creates a case-insensitive trimmed unique index, and installs an auto-generation trigger.</li><li>POS <code>Scan or enter SKU</code> input supports manual entry and USB keyboard-emulated scanners with full validation and manual search fallback.</li><li>Printable Code 128 barcode label generator modal encodes the SKU with readable text below the barcode.</li><li>Authorized damaged-stock adjustment modal deducts sellable stock and logs full audit metadata.</li><li>Analytics rankings and breakdowns compute actual sales percentages from completed sales.</li><li>White-box unit tests verify SKU normalization, sequential generation, POS scan/lookup edge cases, damaged stock adjustments, and sales percentage math.</li></ol>
 
   <h2 id="security" class="page-break">11. Security, audit, and reliability</h2>
   <ul>
@@ -356,8 +356,9 @@ Future revenue and unit projections</div>
     <tr><th>Topic</th><th>Primary source</th></tr>
     <tr><td>Routes and role gates</td><td><code>frontend/src/app/routes.tsx</code>, <code>ProtectedRoute.tsx</code></td></tr>
     <tr><td>Admin modules</td><td><code>frontend/src/app/components/AdminLayout.tsx</code></td></tr>
-    <tr><td>POS transaction payload</td><td><code>frontend/src/app/components/PointOfSale.tsx</code></td></tr>
-    <tr><td>Products and inventory</td><td><code>frontend/src/app/components/ProductManagement.tsx</code></td></tr>
+    <tr><td>POS transaction &amp; SKU scanner</td><td><code>frontend/src/app/components/PointOfSale.tsx</code>, <code>frontend/src/lib/sku.ts</code></td></tr>
+    <tr><td>Products, inventory &amp; barcode/damaged modals</td><td><code>ProductManagement.tsx</code>, <code>BarcodeLabelModal.tsx</code>, <code>DamagedStockModal.tsx</code></td></tr>
+    <tr><td>SKU &amp; barcode migration</td><td><code>database/add_sku_and_barcode_scanning.sql</code></td></tr>
     <tr><td>Replacement</td><td><code>frontend/src/app/components/ReturnManagement.tsx</code></td></tr>
     <tr><td>Promotions</td><td><code>PromotionManagement.tsx</code>, <code>promotion-rules.ts</code>, <code>promotion-performance.ts</code></td></tr>
     <tr><td>Sales Forecast</td><td><code>frontend/src/app/components/PredictiveAnalytics.tsx</code></td></tr>

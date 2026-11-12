@@ -17,6 +17,8 @@ import { normalizeProductDepartment } from '../../lib/product-department';
 import type { Font as ExcelFont } from 'exceljs';
 
 function isCompletedSale(sale: any) {
+  const saleStatus = String(sale?.status ?? '').toLowerCase();
+  if (['cancelled', 'void', 'voided', 'failed', 'refunded'].includes(saleStatus)) return false;
   const payment = Array.isArray(sale.payment) ? sale.payment[0] : sale.payment;
   const status = String(payment?.payment_status ?? '').toLowerCase();
   return ['completed', 'paid', 'success', 'successful'].includes(status);
@@ -868,18 +870,18 @@ export function ReportsAnalytics() {
 
     const rank = (map: Map<string, any>) => {
       const all = Array.from(map.values());
-      const maxSales = Math.max(1, ...all.map((item) => item.sales));
-      const maxRevenue = Math.max(1, ...all.map((item) => item.revenue));
+      const totalUnits = all.reduce((sum, item) => sum + (Number(item.sales) || 0), 0);
+      const totalRevenue = all.reduce((sum, item) => sum + (Number(item.revenue) || 0), 0);
       return {
         byUnits: [...all].sort((a, b) => b.sales - a.sales || b.revenue - a.revenue).slice(0, 5).map((item, idx) => ({
           ...item,
           rank: idx + 1,
-          share: Math.round((item.sales / maxSales) * 100),
+          share: totalUnits > 0 ? Number(((item.sales / totalUnits) * 100).toFixed(1)) : 0,
         })),
         byRevenue: [...all].sort((a, b) => b.revenue - a.revenue || b.sales - a.sales).slice(0, 5).map((item, idx) => ({
           ...item,
           rank: idx + 1,
-          share: Math.round((item.revenue / maxRevenue) * 100),
+          share: totalRevenue > 0 ? Number(((item.revenue / totalRevenue) * 100).toFixed(1)) : 0,
         })),
       };
     };
